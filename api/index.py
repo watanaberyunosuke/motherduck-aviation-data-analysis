@@ -173,9 +173,10 @@ async function loadSummary() {
 async function loadNotams() {
   const rows = await fetch('/api/notams').then(r => r.json());
   const map = L.map('map').setView([5, 110], 3);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap, &copy; CARTO',
-  }).addTo(map);
+  L.tileLayer(
+    'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    { attribution: '&copy; Esri', maxZoom: 16 }
+  ).addTo(map);
   if (!rows.length) {
     document.getElementById('map-empty').style.display = 'block';
     return;
