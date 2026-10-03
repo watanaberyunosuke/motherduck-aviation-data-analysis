@@ -9,6 +9,8 @@ Constraints that shape this module (all from OpenSky's docs):
   * /tracks/all is labelled experimental and only serves the last 30 days.
   * Each endpoint has its own daily credit quota; the balance is returned in the
     X-Rate-Limit-Remaining header. This module stops early rather than hitting 429.
+    A /tracks/all call costs several credits (4 to 30 seen in Oct 2026), so the tracks
+    quota covers far fewer flights than there are calls in the credit balance.
 
 What OpenSky does NOT provide: scheduled departure/arrival times. It observes aircraft,
 it does not know timetables, so schedule-based "delay" cannot be computed from it. The
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import duckdb
@@ -47,6 +50,9 @@ class OpenSkyClient:
         self._token_expires = 0.0
         self.min_credits_remaining = min_credits_remaining
         self.credits_remaining: dict[str, int] = {}
+        # HTTP status codes per endpoint, e.g. {"tracks": Counter({200: 12, 404: 3})}.
+        # Logged with each run, so a run that stores nothing shows why.
+        self.statuses: dict[str, Counter] = {}
 
     def _auth_header(self) -> dict:
         if not self._token or time.time() > self._token_expires - 60:
@@ -68,6 +74,7 @@ class OpenSkyClient:
 
         r = self._s.get(f"{API}{path}", params=params, headers=self._auth_header(),
                         timeout=DEFAULT_TIMEOUT)
+        self.statuses.setdefault(endpoint, Counter())[r.status_code] += 1
         if "X-Rate-Limit-Remaining" in r.headers:
             self.credits_remaining[endpoint] = int(r.headers["X-Rate-Limit-Remaining"])
         if r.status_code == 429:
@@ -120,7 +127,11 @@ def track_row(t: dict) -> dict:
 
 def select_flights_to_track(con: duckdb.DuckDBPyConnection, icaos: list[str],
                             begin: int, end: int, in_scope_only: bool, limit: int) -> list[tuple]:
-    """Flights in the window that have no stored track yet."""
+    """Flights in the window that have no stored track yet, most recently landed first.
+
+    Newest first because the tracks quota runs out long before the list does, and the
+    oldest flights are the first to age out of /tracks.
+    """
     in_list = ", ".join(f"'{c}'" for c in icaos)
     scope = (f"and f.est_departure_airport in ({in_list}) and f.est_arrival_airport in ({in_list})"
              if in_scope_only else "")
@@ -132,7 +143,7 @@ def select_flights_to_track(con: duckdb.DuckDBPyConnection, icaos: list[str],
               select 1 from raw.opensky_tracks t
               where t.icao24 = f.icao24
                 and t.start_time between f.first_seen - 1800 and coalesce(f.last_seen, f.first_seen) )
-        order by f.first_seen
+        order by f.last_seen desc, f.icao24
         limit ?
     """, [begin, end, limit]).fetchall()
 
@@ -151,7 +162,7 @@ def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], cfg: dict) -> dict:
 
         todo = select_flights_to_track(con, icaos, begin, end,
                                        bool(cfg.get("track_in_scope_routes_only", True)),
-                                       int(cfg.get("max_tracks_per_run", 400)))
+                                       int(cfg.get("max_tracks_per_run", 100)))
         for icao24, first_seen, last_seen in todo:
             # Any instant inside the flight identifies it; the midpoint is safest.
             midpoint = (first_seen + (last_seen or first_seen)) // 2
@@ -165,7 +176,15 @@ def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], cfg: dict) -> dict:
     except requests.HTTPError as exc:
         stats["stopped_early"] = f"HTTP error: {exc}"
         raise
+    except Exception as exc:  # network errors, warehouse errors: still say what stopped it
+        stats["stopped_early"] = f"{type(exc).__name__}: {exc}"
+        raise
     finally:
         warehouse.log_run(con, "opensky", stats["flights"] + stats["tracks"],
-                          detail=f"{stats} credits={client.credits_remaining}")
+                          detail=f"{stats} credits={client.credits_remaining} "
+                                 f"http={_status_summary(client.statuses)}")
     return stats
+
+
+def _status_summary(statuses: dict[str, Counter]) -> dict[str, dict[int, int]]:
+    return {endpoint: dict(sorted(c.items())) for endpoint, c in statuses.items()}

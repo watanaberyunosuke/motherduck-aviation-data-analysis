@@ -76,3 +76,58 @@ def test_opensky_day_window_is_a_whole_utc_day():
     begin, end = opensky.day_window(1, now=datetime(2026, 9, 27, 3, 0, tzinfo=timezone.utc))
     assert datetime.fromtimestamp(begin, timezone.utc) == datetime(2026, 9, 26, tzinfo=timezone.utc)
     assert end - begin == 86400
+
+
+def test_opensky_tracks_newest_flights_first(con):
+    in_scope = {"est_departure_airport": "YSSY", "est_arrival_airport": "YMML"}
+    flights = [
+        {"icao24": "old", "first_seen": 1000, "last_seen": 5000, **in_scope},
+        {"icao24": "new", "first_seen": 3000, "last_seen": 9000, **in_scope},
+        {"icao24": "mid", "first_seen": 2000, "last_seen": 7000, **in_scope},
+        {"icao24": "out", "first_seen": 2000, "last_seen": 8000,
+         "est_departure_airport": "YSSY", "est_arrival_airport": "NZAA"},
+    ]
+    rows = [{**f, "callsign": None, "fetched_at": warehouse.utcnow(), "payload": {}} for f in flights]
+    warehouse.upsert(con, "raw.opensky_flights", rows, ["icao24", "first_seen"])
+
+    todo = opensky.select_flights_to_track(con, ["YSSY", "YMML"], 0, 10_000, True, limit=2)
+    assert [t[0] for t in todo] == ["new", "mid"]
+
+
+class _FakeResponse:
+    def __init__(self, status, body=None, remaining=None):
+        self.status_code = status
+        self._body = body
+        self.headers = {} if remaining is None else {"X-Rate-Limit-Remaining": str(remaining)}
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        pass
+
+
+def test_opensky_run_log_counts_http_statuses(con, monkeypatch):
+    in_scope = {"est_departure_airport": "YSSY", "est_arrival_airport": "YMML"}
+    begin, end = opensky.day_window(1)
+    flights = [{"icao24": f"a{i}", "firstSeen": begin + i * 100, "lastSeen": begin + i * 100 + 50,
+                "estDepartureAirport": "YSSY", "estArrivalAirport": "YMML"} for i in range(3)]
+    track = {"icao24": "a2", "startTime": float(begin + 200), "endTime": begin + 250,
+             "path": [[begin + 200, -33.9, 151.2, 0, 0, False]]}
+    responses = iter([
+        _FakeResponse(200, flights, remaining=3000),  # YSSY arrivals
+        _FakeResponse(404),                           # YSSY departures
+        _FakeResponse(404),                           # YMML arrivals
+        _FakeResponse(404),                           # YMML departures
+        _FakeResponse(200, track, remaining=970),     # a2 (newest)
+        _FakeResponse(404),                           # a1
+        _FakeResponse(429),                           # a0
+    ])
+    monkeypatch.setattr(opensky.OpenSkyClient, "_auth_header", lambda self: {})
+    monkeypatch.setattr(opensky, "session", lambda: type("S", (), {"get": lambda *a, **k: next(responses)})())
+
+    stats = opensky.ingest(con, ["YSSY", "YMML"], {"days_back": 1, "min_credits_remaining": 0})
+
+    assert stats["tracks"] == 1 and "429" in stats["stopped_early"]
+    detail = con.execute("select detail from raw.ingest_log where source = 'opensky'").fetchone()[0]
+    assert "http={'flights': {200: 1, 404: 3}, 'tracks': {200: 1, 404: 1, 429: 1}}" in detail
