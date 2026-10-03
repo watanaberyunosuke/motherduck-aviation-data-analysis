@@ -5,7 +5,8 @@ name: ci-cd
 # deploy: pushes to main (or a manual run on main), after tests pass. Builds the dbt
 #         project into MotherDuck so model and seed changes go live before the next
 #         scheduled ingest, then publishes the aviation_pipeline Flight (pinned to this
-#         commit) and the Airport conditions Dive (scripts/deploy_motherduck.py).
+#         commit) and the Airport conditions Dive (scripts/deploy_motherduck.py), then
+#         runs the Flight once (METAR + dbt) and fails if that run fails.
 # Required secrets (repository or `production` environment): MOTHERDUCK_TOKEN,
 # OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET (copied into the Flight's `opensky` secret)
 
@@ -85,3 +86,9 @@ jobs:
           OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
           OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
         run: uv run python scripts/deploy_motherduck.py --sha "$GITHUB_SHA"
+
+      # Smoke test the published Flight: one METAR ingest then dbt build, in the Flight
+      # runtime. Catches failures that only show up there (e.g. ingest and dbt sharing a
+      # process) on the push that causes them, not at the next hourly run.
+      - name: Run Flight once
+        run: uv run python scripts/run_flight.py --sources metar
