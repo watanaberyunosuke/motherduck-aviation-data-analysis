@@ -1,15 +1,13 @@
 name: ingest
 
-# GitHub runners are ephemeral, so scheduled runs write to MotherDuck (WAREHOUSE=md:aviation).
+# Manual fallback only. Scheduled ingest runs as the MotherDuck Flight `aviation_pipeline`
+# (flights/aviation_pipeline/main.py), deployed by the ci.yml deploy job. Use this when
+# the Flight is unavailable, or to re-run a source from GitHub.
+#
+# GitHub runners are ephemeral, so this writes to MotherDuck (WAREHOUSE=md:aviation).
 # Required repository secrets:
 #   MOTHERDUCK_TOKEN, OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET
-#
-# Schedules are UTC and deliberately off the hour (GitHub delays jobs queued at :00).
 on:
-  schedule:
-    - cron: "7 * * * *"      # hourly: METAR + TAF
-    - cron: "22 */3 * * *"   # every 3 h: Hong Kong NOTAMs (free, official)
-    - cron: "47 6 * * *"     # daily 06:47 UTC: OpenSky flights + tracks for yesterday
   workflow_dispatch:
     inputs:
       source:
@@ -18,7 +16,8 @@ on:
         options: [metar, taf, notam-hk, opensky, all]
         default: all
 
-# One writer at a time against the warehouse (shared with the deploy job in ci.yml).
+# One writer at a time with the deploy job in ci.yml. This does not cover the Flight,
+# which runs at :07 each hour; avoid starting this around then.
 concurrency:
   group: warehouse-writer
   cancel-in-progress: false
@@ -41,23 +40,10 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen --extra dev
 
-      - name: Pick sources for this trigger
-        id: pick
-        run: |
-          case "${{ github.event.schedule }}" in
-            "7 * * * *")    echo "sources=metar taf" >> "$GITHUB_OUTPUT" ;;
-            "22 */3 * * *") echo "sources=notam-hk" >> "$GITHUB_OUTPUT" ;;
-            "47 6 * * *")   echo "sources=opensky" >> "$GITHUB_OUTPUT" ;;
-            *)              echo "sources=${{ inputs.source || 'all' }}" >> "$GITHUB_OUTPUT" ;;
-          esac
-
       - name: Ingest
-        run: |
-          status=0
-          for s in ${{ steps.pick.outputs.sources }}; do
-            uv run aviation ingest "$s" || status=1
-          done
-          exit $status
+        env:
+          SOURCE: ${{ inputs.source }}
+        run: uv run aviation ingest "$SOURCE"
 
       # Rebuild marts even if one source failed, so the others still land.
       - name: dbt build

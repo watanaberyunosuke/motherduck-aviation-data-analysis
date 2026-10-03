@@ -5,6 +5,7 @@ How much does weather and runway availability cost arriving flights at Sydney, M
 - Ingests METAR/TAF weather, NOTAMs (Hong Kong only for now) and ADS-B flight paths on a schedule into DuckDB (local) or MotherDuck (scheduled runs).
 - Transforms with dbt into marts that line up each arrival with the weather and NOTAMs in force when it landed.
 - Measures **excess terminal-area time**, the minutes an arrival spends within 50 NM of its destination beyond that airport's rolling median. This is the weather-sensitive part of a flight: holding, vectoring and go-arounds.
+- Scheduled by a [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) and visualised in a Vercel dashboard plus a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/).
 - Modelled on [colin-k-rogers/formula-1-data-analysis](https://github.com/colin-k-rogers/formula-1-data-analysis): scheduled ingest, then dbt, then dashboard.
 
 ## 1. Data sources
@@ -21,11 +22,12 @@ Australia (Airservices NAIPS) and Singapore (CAAS AIM-SG) publish live NOTAMs on
 ## 2. Architecture
 
 ```
-                         src/aviation            dbt/models
+                         src/aviation            dbt/models                     ┌─> Vercel dashboard (api/)
 aviationweather.gov ─┐
-notam.ais.gov.hk ────┼─> ingest (Python) ──> raw.* ──> staging.* ──> marts.*
-OpenSky Network ─────┘   idempotent upserts,        views          tables
+notam.ais.gov.hk ────┼─> ingest (Python) ──> raw.* ──> staging.* ──> marts.* ──┤
+OpenSky Network ─────┘   idempotent upserts,        views          tables      └─> MotherDuck Dive (dives/)
                          full JSON payload kept
+        └──────────── both run hourly in the MotherDuck Flight aviation_pipeline (flights/) ────────────┘
 ```
 
 - **Raw layer** (`src/aviation/warehouse.py`): one table per source, keyed on the natural key, with the full payload as JSON. Re-running any fetch overwrites rather than duplicates.
@@ -65,16 +67,49 @@ Credentials:
 - **OpenSky**: create a free account, then Account > API client. New accounts must use OAuth2 client credentials.
 - **MotherDuck** (scheduled runs only): set `WAREHOUSE=md:aviation` and `MOTHERDUCK_TOKEN`. Check MotherDuck's current free-tier limits before relying on it.
 
-## 5. Scheduling
+## 5. Scheduling and dashboards
 
-`.github/workflows/ingest.yml` runs each source on its own cron (UTC, off the hour) and rebuilds dbt after every run. Add the three secrets listed at the top of that file.
+### Flight: `aviation_pipeline`
+
+A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs the pipeline at :07 every hour (UTC). Each run downloads the commit it is pinned to from GitHub, runs the ingest sources due that hour, then `dbt build`. Ingest and dbt run in one process, so they never write to the warehouse at the same time.
+
+| UTC hour | Sources |
+|---|---|
+| Every hour | METAR, TAF |
+| 0, 3, 6, … 21 | + Hong Kong NOTAMs |
+| 6 | + OpenSky flights and tracks for yesterday |
+
+The source is `flights/aviation_pipeline/main.py`. OpenSky credentials come from a Flight secret named `opensky`, which the deploy creates from the GitHub secrets. To run it now, or with other sources:
+
+```sql
+-- flight_id from: select flight_id from md_list_flights() where flight_name = 'aviation_pipeline'
+select * from md_run_flight(flight_id := '<id>', config := MAP {'SOURCES': 'opensky'});
+select * from md_list_flight_runs(flight_id := '<id>') order by run_number desc limit 5;
+select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
+```
+
+`SOURCES` takes space-separated sources (`metar taf notam-hk opensky`), or `none` for dbt only. Cron scheduling needs a MotherDuck plan that includes scheduled Flights (Lite unlimited, Business or Enterprise).
+
+`.github/workflows/ingest.yml` is now a manual fallback (`workflow_dispatch` only) that runs one source and dbt from GitHub Actions.
+
+### Dive: Airport conditions
+
+`dives/airport_conditions/index.tsx` is a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/), a React component that MotherDuck hosts and that queries `aviation.marts` live. The Vercel dashboard shows fleet-wide averages and the NOTAM map. The Dive drills into one airport: 7-day weather shares for every airport, 72 hours of wind and flight category, daily movements, median excess terminal time with and without each weather condition, and the slowest arrivals. The selected airport is kept in the URL, so a link opens the same view.
+
+To preview edits with hot reload, install the [MotherDuck CLI](https://motherduck.com/docs/sql-reference/motherduck-cli/) and run `motherduck dive watch dives/airport_conditions`. Only `index.tsx` and `dive.metadata.json` (title, description) are deployed.
+
+The Dive queries `md:aviation` directly, so viewers need access to that database. To share the Dive with someone else in your organisation, share the database with them first.
+
+### Deploying
+
+`scripts/deploy_motherduck.py` (or `make deploy-motherduck`) publishes both. It matches the Flight by name and the Dive by title, creates them if missing and updates them otherwise; every update is a new version in MotherDuck. Run locally, it refuses a commit that is not yet on GitHub, because the Flight would fail to download it.
 
 `ci.yml` is the CI/CD pipeline:
 
 - **test**: on every push and pull request, runs `pytest` (including a full dbt build on a temporary DuckDB file) on Python 3.11 and 3.14.
-- **deploy**: on pushes to `main`, after tests pass, rebuilds seeds and runs `dbt build` against MotherDuck (`md:aviation`), creating the database if it does not exist. It uses the `production` environment, so you can add required reviewers under Settings > Environments. It needs the `MOTHERDUCK_TOKEN` secret.
+- **deploy**: on pushes to `main`, after tests pass, rebuilds seeds and runs `dbt build` against MotherDuck (`md:aviation`), creating the database if it does not exist. It then points the Flight at the new commit and publishes the Dive. It uses the `production` environment, so you can add required reviewers under Settings > Environments. It needs the `MOTHERDUCK_TOKEN`, `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` secrets.
 
-Deploy and ingest share a concurrency group, so they never write to the warehouse at the same time. Both install dependencies from `uv.lock`; after changing dependencies in `pyproject.toml`, run `uv lock` and commit the lockfile.
+Deploy and the manual ingest workflow share a concurrency group, so they never write to the warehouse at the same time. The Flight is outside that group: a deploy that lands at :07 can overlap the hourly run. If dbt then fails on a conflicting write, the next hourly run rebuilds. Both install dependencies from `uv.lock`; after changing dependencies in `pyproject.toml`, run `uv lock` and commit the lockfile.
 
 ## 6. Known limitations
 
@@ -96,6 +131,9 @@ Deploy and ingest share a concurrency group, so they never write to the warehous
 | `SchemaMismatch` from RapidAPI (if re-enabled) | Provider changed its response. Inspect one raw response and update `notam_rapidapi.rows`. |
 | Days or hours look shifted | dbt forces `TimeZone: UTC` in `profiles.yml`. Ad hoc DuckDB sessions do not: run `set TimeZone='UTC'`. |
 | Deploy fails on a seed column change | Should not happen: deploy runs `dbt seed --full-refresh`. Scheduled ingest runs do not, so let a deploy finish before the next ingest. |
+| Flight run failed | `select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>)`. Each source prints `FAILED - <reason>`; the run fails if any source or dbt failed. |
+| Deploy: `Flight secret 'opensky' does not exist` | Add `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` as GitHub secrets (or export them locally) and re-run. |
+| Dive shows `Catalog does not exist` | The viewer cannot see `md:aviation`. Share the database with them. |
 | dbt cannot find the database | dbt runs from `dbt/`. Use `make transform`, or export an absolute `WAREHOUSE` path. |
 
 ## 8. Next steps
