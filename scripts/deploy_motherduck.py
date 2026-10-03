@@ -6,8 +6,9 @@ Runs in the ci.yml deploy job on every push to main; can also be run locally wit
 MOTHERDUCK_TOKEN set. Both objects are matched by name, so the first run creates them and
 later runs update them (each update is a new version in MotherDuck).
 
-- Flight `aviation_pipeline` (flights/aviation_pipeline): hourly ingest + dbt build,
-  pinned to --sha. The commit must already be on GitHub, because the Flight downloads it.
+- Flight `aviation_pipeline` (flights/aviation_pipeline): ingest + dbt build, pinned to
+  --sha. The commit must already be on GitHub, because the Flight downloads it. Published
+  unscheduled; scripts/run_flight.py starts it hourly from GitHub Actions.
 - Flight secret `opensky`: (re)created from OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET when
   both are set, otherwise it must already exist.
 - Dive "Airport conditions" (dives/airport_conditions).
@@ -18,6 +19,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 os.environ.setdefault("HOME", "/tmp")  # duckdb's extension cache, as in api/index.py
@@ -30,7 +32,8 @@ DATABASE = "aviation"
 
 FLIGHT_NAME = "aviation_pipeline"
 FLIGHT_DIR = ROOT / "flights" / FLIGHT_NAME
-FLIGHT_SCHEDULE = "7 * * * *"  # UTC, off the hour; the Flight picks sources by hour
+# No schedule_cron: MotherDuck only schedules Flights on a Business plan, so the hourly
+# trigger is the cron in .github/workflows/ingest.yml (scripts/run_flight.py).
 FLIGHT_SECRET = "opensky"
 FLIGHT_SECRET_KEYS = ("OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET")
 
@@ -80,7 +83,6 @@ def deploy_flight(con: duckdb.DuckDBPyConnection, sha: str) -> None:
         "requirements_txt": sql_str((FLIGHT_DIR / "requirements.txt").read_text()),
         "config": sql_map({"WAREHOUSE": f"md:{DATABASE}", "SOURCES": ""}),
         "flight_secret_names": sql_list([FLIGHT_SECRET]),
-        "schedule_cron": sql_str(FLIGHT_SCHEDULE),
     }
     named = ", ".join(f"{k} := {v}" for k, v in args.items())
     ids = [r[0] for r in con.execute(
@@ -136,10 +138,18 @@ def main() -> None:
                              f"Flight downloads that commit.")
 
     con = duckdb.connect("md:")
-    if args.only in (None, "flight"):
-        deploy_flight(con, sha)
-    if args.only in (None, "dive"):
-        deploy_dive(con, sha)
+    steps = {"flight": deploy_flight, "dive": deploy_dive}
+    failed = []
+    for name, deploy in steps.items():
+        if args.only in (None, name):
+            # The Dive does not depend on the Flight, so one failing must not skip the other.
+            try:
+                deploy(con, sha)
+            except (duckdb.Error, SystemExit) as exc:
+                print(f"{name}: FAILED - {exc}", file=sys.stderr)
+                failed.append(name)
+    if failed:
+        raise SystemExit(f"deploy failed: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
