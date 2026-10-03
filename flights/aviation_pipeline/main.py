@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -64,11 +65,13 @@ def download_repo(repo: str, sha: str, dest: Path) -> Path:
 
 
 def run_dbt(project_dir: Path) -> bool:
-    from dbt.cli.main import dbtRunner
-
+    # A separate process, not dbtRunner: ingest's md: connection leaves a cached database
+    # instance in this process after close(), and dbt-duckdb connects to the same database
+    # with different config (TimeZone etc.), which DuckDB refuses for a shared instance.
     args = ["build", "--project-dir", str(project_dir), "--profiles-dir", str(project_dir)]
-    print(f"dbt {' '.join(args)}")
-    return dbtRunner().invoke(args).success
+    print(f"dbt {' '.join(args)}", flush=True)
+    cmd = [sys.executable, "-c", "from dbt.cli.main import cli; cli()", *args]
+    return subprocess.run(cmd).returncode == 0
 
 
 def main() -> None:
