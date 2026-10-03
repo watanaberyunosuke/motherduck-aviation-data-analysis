@@ -1,0 +1,33 @@
+name: aviation
+version: "0.1.0"
+config-version: 2
+profile: aviation
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+vars:
+  # Radius around the destination that counts as the terminal area (50 NM).
+  terminal_radius_km: 92.6
+  # Rolling window for the per-destination baseline of terminal-area time.
+  baseline_days: 30
+  # How far back from arrival to look for the latest METAR.
+  metar_max_age_minutes: 90
+
+models:
+  aviation:
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table
+
+seeds:
+  aviation:
+    +schema: reference
+    airports:
+      +column_types:
+        notam_source: varchar  # empty = no NOTAM feed; must match config/airports.yml

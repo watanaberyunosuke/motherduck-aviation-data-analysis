@@ -1,0 +1,13 @@
+aviation:
+  target: default
+  outputs:
+    default:
+      type: duckdb
+      # Absolute path to the DuckDB file, or md:<database> for MotherDuck.
+      # `make transform` sets this for you; when calling dbt directly, export it first.
+      path: "{{ env_var('WAREHOUSE', '../data/aviation.duckdb') }}"
+      threads: 4
+      # Every date_trunc / cast-to-date in the models is meant as UTC. Without this,
+      # DuckDB uses the machine's timezone and day boundaries shift.
+      settings:
+        TimeZone: UTC

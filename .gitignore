@@ -1,0 +1,11 @@
+.env
+data/*.duckdb
+data/*.duckdb.wal
+__pycache__/
+*.egg-info/
+.pytest_cache/
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+.venv/
+dbt/.user.yml

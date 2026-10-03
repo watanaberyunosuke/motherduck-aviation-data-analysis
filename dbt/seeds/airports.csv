@@ -1,0 +1,6 @@
+icao,name,country,lat,lon,notam_source
+YSSY,Sydney Kingsford Smith,AU,-33.946,151.177,
+YMML,Melbourne Tullamarine,AU,-37.673,144.843,
+YBBN,Brisbane,AU,-27.384,153.117,
+WSSS,Singapore Changi,SG,1.359,103.989,
+VHHH,Hong Kong International,HK,22.309,113.915,hk_cad

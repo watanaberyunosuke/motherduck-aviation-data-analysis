@@ -1,0 +1,19 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Landed by the Python ingestion (src/aviation). Full payloads kept as JSON.
+    tables:
+      - name: metar
+        description: Aviation Weather Center METAR/SPECI, one row per (icao, obs_time).
+      - name: taf
+        description: Aviation Weather Center TAFs, one row per (icao, issue_time).
+      - name: notam
+        description: >
+          NOTAMs from the HK CAD feed and the RapidAPI provider. ICAO fields are parsed at
+          load time by aviation.parsing.notam; first_seen_at/last_seen_at track presence in
+          each source's active list.
+      - name: opensky_flights
+        description: OpenSky arrivals and departures for in-scope airports.
+      - name: opensky_tracks
+        description: OpenSky /tracks/all payloads, path = [time, lat, lon, baro_alt_m, true_track, on_ground].

@@ -1,0 +1,172 @@
+[
+ {
+  "icaoId": "WSSS",
+  "receiptTime": "2026-09-27T12:31:00.044Z",
+  "obsTime": 1790512200,
+  "reportTime": "2026-09-27T12:30:00.000Z",
+  "temp": 27,
+  "dewp": 23,
+  "wdir": 130,
+  "wspd": 9,
+  "visib": "6+",
+  "altim": 1011,
+  "qcField": 16,
+  "metarType": "METAR",
+  "rawOb": "METAR WSSS 271230Z 13009KT 100V160 9999 FEW016 BKN160 27/23 Q1011 NOSIG",
+  "lat": 1.368,
+  "lon": 103.982,
+  "elev": 17,
+  "name": "Singapore/Changi Intl, 4, SG",
+  "cover": "BKN",
+  "clouds": [
+   {
+    "cover": "FEW",
+    "base": 1600
+   },
+   {
+    "cover": "BKN",
+    "base": 16000
+   }
+  ],
+  "fltCat": "VFR"
+ },
+ {
+  "icaoId": "YMML",
+  "receiptTime": "2026-09-27T12:31:04.264Z",
+  "obsTime": 1790512200,
+  "reportTime": "2026-09-27T12:30:00.000Z",
+  "temp": 9,
+  "dewp": 7,
+  "wdir": 190,
+  "wspd": 7,
+  "visib": "6+",
+  "altim": 1035,
+  "qcField": 2,
+  "metarType": "SPECI",
+  "rawOb": "SPECI YMML 271230Z AUTO 19007KT 9999 // BKN014 09/07 Q1035",
+  "lat": -37.666,
+  "lon": 144.832,
+  "elev": 115,
+  "name": "Melbourne Intl, VI, AU",
+  "cover": "BKN",
+  "clouds": [
+   {
+    "cover": "BKN",
+    "base": 1400
+   }
+  ],
+  "fltCat": "MVFR"
+ },
+ {
+  "icaoId": "YMML",
+  "receiptTime": "2026-09-27T12:19:02.771Z",
+  "obsTime": 1790511480,
+  "reportTime": "2026-09-27T12:18:00.000Z",
+  "temp": 9,
+  "dewp": 7,
+  "wdir": 190,
+  "wspd": 7,
+  "visib": "6+",
+  "altim": 1035,
+  "qcField": 2,
+  "metarType": "SPECI",
+  "rawOb": "SPECI YMML 271218Z AUTO 19007KT 9999 // BKN014 09/07 Q1035",
+  "lat": -37.666,
+  "lon": 144.832,
+  "elev": 115,
+  "name": "Melbourne Intl, VI, AU",
+  "cover": "BKN",
+  "clouds": [
+   {
+    "cover": "BKN",
+    "base": 1400
+   }
+  ],
+  "fltCat": "MVFR"
+ },
+ {
+  "icaoId": "YBBN",
+  "receiptTime": "2026-09-27T12:08:08.070Z",
+  "obsTime": 1790510400,
+  "reportTime": "2026-09-27T12:00:00.000Z",
+  "temp": 19,
+  "dewp": 16,
+  "wdir": 0,
+  "wspd": 0,
+  "visib": "6+",
+  "altim": 1027,
+  "qcField": 2,
+  "metarType": "METAR",
+  "rawOb": "METAR YBBN 271200Z AUTO 00000KT 9999 // OVC031 19/16 Q1027",
+  "lat": -27.391,
+  "lon": 153.13,
+  "elev": 3,
+  "name": "Brisbane Intl, QL, AU",
+  "cover": "OVC",
+  "clouds": [
+   {
+    "cover": "OVC",
+    "base": 3100
+   }
+  ],
+  "fltCat": "VFR"
+ },
+ {
+  "icaoId": "WSSS",
+  "receiptTime": "2026-09-27T12:00:51.956Z",
+  "obsTime": 1790510400,
+  "reportTime": "2026-09-27T12:00:00.000Z",
+  "temp": 26,
+  "dewp": 23,
+  "wdir": 160,
+  "wspd": 7,
+  "visib": "6+",
+  "altim": 1011,
+  "qcField": 16,
+  "metarType": "METAR",
+  "rawOb": "METAR WSSS 271200Z 16007KT 9999 FEW016 BKN160 26/23 Q1011 NOSIG",
+  "lat": 1.368,
+  "lon": 103.982,
+  "elev": 17,
+  "name": "Singapore/Changi Intl, 4, SG",
+  "cover": "BKN",
+  "clouds": [
+   {
+    "cover": "FEW",
+    "base": 1600
+   },
+   {
+    "cover": "BKN",
+    "base": 16000
+   }
+  ],
+  "fltCat": "VFR"
+ },
+ {
+  "icaoId": "VHHH",
+  "receiptTime": "2026-09-27T12:02:22.417Z",
+  "obsTime": 1790510400,
+  "reportTime": "2026-09-27T12:00:00.000Z",
+  "temp": 30,
+  "dewp": 24,
+  "wdir": 200,
+  "wspd": 10,
+  "visib": "6+",
+  "altim": 1008,
+  "qcField": 16,
+  "metarType": "METAR",
+  "rawOb": "METAR VHHH 271200Z 20010KT 9999 FEW015 30/24 Q1008 NOSIG",
+  "lat": 22.309,
+  "lon": 113.922,
+  "elev": 9,
+  "name": "Hong Kong Intl, HK, HK",
+  "cover": "FEW",
+  "clouds": [
+   {
+    "cover": "FEW",
+    "base": 1500
+   }
+  ],
+  "fltCat": "VFR"
+ }
+]

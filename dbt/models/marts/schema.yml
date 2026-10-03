@@ -1,0 +1,70 @@
+version: 2
+
+models:
+  - name: fct_airport_weather_hourly
+    description: Latest METAR per airport per UTC hour.
+    columns:
+      - name: icao
+        tests: [not_null]
+      - name: hour_utc
+        tests: [not_null]
+      - name: flight_category
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['VFR', 'MVFR', 'IFR', 'LIFR']
+              config:
+                where: "flight_category is not null"
+    tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [icao, hour_utc]
+
+  - name: fct_notams
+    description: NOTAMs from all sources with category and in-force flags.
+    columns:
+      - name: notam_key
+        tests: [not_null]
+      - name: starts_at
+        description: Null only when the provider's text could not be parsed.
+      - name: category
+        description: From the Q-code subject (letters 2-3); null when there is no ICAO Q-line.
+    tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [source, notam_key]
+
+  - name: fct_daily_airport_movements
+    description: Observed ADS-B arrivals and departures per airport per day.
+    tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [icao, day_utc]
+
+  - name: fct_flight_track_metrics
+    description: Path length, route inefficiency and terminal-area time per tracked flight.
+    columns:
+      - name: path_km
+        tests:
+          - not_null
+      - name: route_inefficiency
+        description: Flown distance / great-circle distance. Values below ~0.95 indicate missing coverage.
+    tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [icao24, track_start_epoch]
+
+  - name: fct_arrival_weather_impact
+    description: >
+      Well-covered arrivals with weather, NOTAM state and excess terminal-area time versus
+      the destination's rolling median. Primary table for the dashboard.
+    columns:
+      - name: terminal_minutes
+        tests: [not_null]
+      - name: has_notam_feed
+        description: False for airports with no NOTAM source (currently AU and SG).
+        tests: [not_null]
+      - name: surface_notam_in_force
+        description: Null when has_notam_feed is false (unknown, not "none in force").
+      - name: runway_closure_in_force
+        description: Null when has_notam_feed is false (unknown, not "none in force").

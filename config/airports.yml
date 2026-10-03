@@ -1,0 +1,40 @@
+# Airports in scope. `notam_source` decides which NOTAM client serves each airport:
+#   hk_cad   -> Hong Kong CAD public feed (free, official, no key)
+#   rapidapi -> SkyLink NOTAM API on RapidAPI (paid; no free tier. Basic: $18.59/mo, 5,000 requests)
+#   null     -> no NOTAM feed. NOTAM flags in the marts are null (unknown) for these airports.
+# Australia and Singapore have no free NOTAM feed, so they are null for now. Set them back
+# to rapidapi to re-enable SkyLink. Keep `notam_source` in dbt/seeds/airports.csv in step.
+# Coordinates live in dbt/seeds/airports.csv so SQL models can use them.
+airports:
+  - icao: YSSY
+    name: Sydney Kingsford Smith
+    notam_source: null
+  - icao: YMML
+    name: Melbourne Tullamarine
+    notam_source: null
+  - icao: YBBN
+    name: Brisbane
+    notam_source: null
+  - icao: WSSS
+    name: Singapore Changi
+    notam_source: null
+  - icao: VHHH
+    name: Hong Kong International
+    notam_source: hk_cad
+
+opensky:
+  # Flights endpoints are batch-processed overnight by OpenSky, so pull whole UTC days
+  # that have already finished. 1 = yesterday.
+  days_back: 1
+  # Track only flights whose origin AND destination are both in the airport list above.
+  # These are the routes we can build a baseline for.
+  track_in_scope_routes_only: true
+  # Hard cap on /tracks calls per run, independent of the API's own quota.
+  max_tracks_per_run: 400
+  # Stop calling OpenSky when X-Rate-Limit-Remaining falls below this.
+  min_credits_remaining: 200
+
+rapidapi:
+  # Unused while no airport has notam_source: rapidapi. SkyLink has no free tier. Basic ($18.59/mo) includes 5,000 requests, then $0.007 each.
+  # 4 airports x 4 runs/day x 30 days = 480 calls/month. Documentation only; not enforced in code.
+  monthly_request_budget: 5000

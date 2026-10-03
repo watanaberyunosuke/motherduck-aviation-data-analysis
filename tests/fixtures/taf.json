@@ -1,0 +1,183 @@
+[
+ {
+  "icaoId": "WSSS",
+  "dbPopTime": "2026-09-27T11:35:33.833Z",
+  "bulletinTime": "2026-09-27T11:00:00.000Z",
+  "issueTime": "2026-09-27T11:00:00.000Z",
+  "validTimeFrom": 1790510400,
+  "validTimeTo": 1790618400,
+  "rawTAF": "TAF WSSS 271100Z 2712/2818 18007KT 9999 FEW015 SCT020 PROB30 TEMPO 2805/2808 3000 TSRA FEW012CB BKN015",
+  "mostRecent": 1,
+  "remarks": "",
+  "lat": 1.368,
+  "lon": 103.982,
+  "elev": 17,
+  "prior": 0,
+  "name": "Singapore/Changi Intl",
+  "fcsts": [
+   {
+    "timeFrom": 1790510400,
+    "timeTo": 1790618400,
+    "timeBec": null,
+    "fcstChange": null,
+    "probability": null,
+    "wdir": 180,
+    "wspd": 7,
+    "wgst": null,
+    "wshearHgt": null,
+    "wshearDir": null,
+    "wshearSpd": null,
+    "visib": "6+",
+    "altim": null,
+    "vertVis": null,
+    "wxString": null,
+    "notDecoded": null,
+    "clouds": [
+     {
+      "cover": "FEW",
+      "base": 1500,
+      "type": null
+     },
+     {
+      "cover": "SCT",
+      "base": 2000,
+      "type": null
+     }
+    ],
+    "icgTurb": [],
+    "temp": []
+   },
+   {
+    "timeFrom": 1790571600,
+    "timeTo": 1790582400,
+    "timeBec": null,
+    "fcstChange": "TEMPO",
+    "probability": 30,
+    "wdir": null,
+    "wspd": null,
+    "wgst": null,
+    "wshearHgt": null,
+    "wshearDir": null,
+    "wshearSpd": null,
+    "visib": 1.86,
+    "altim": null,
+    "vertVis": null,
+    "wxString": "TSRA",
+    "notDecoded": null,
+    "clouds": [
+     {
+      "cover": "FEW",
+      "base": 1200,
+      "type": "CB"
+     },
+     {
+      "cover": "BKN",
+      "base": 1500,
+      "type": null
+     }
+    ],
+    "icgTurb": [],
+    "temp": []
+   }
+  ]
+ },
+ {
+  "icaoId": "YSSY",
+  "dbPopTime": "2026-09-27T11:50:14.828Z",
+  "bulletinTime": "2026-09-27T11:00:00.000Z",
+  "issueTime": "2026-09-27T11:12:00.000Z",
+  "validTimeFrom": 1790510400,
+  "validTimeTo": 1790618400,
+  "rawTAF": "TAF YSSY 271112Z 2712/2818 15012KT 9999 -SHRA SCT035 FM280000 13012KT 9999 NSW SCT045 FM281200 29006KT 9999 SCT030",
+  "mostRecent": 1,
+  "remarks": "",
+  "lat": -33.946,
+  "lon": 151.173,
+  "elev": 3,
+  "prior": 0,
+  "name": "Sydney Intl",
+  "fcsts": [
+   {
+    "timeFrom": 1790510400,
+    "timeTo": 1790553600,
+    "timeBec": null,
+    "fcstChange": null,
+    "probability": null,
+    "wdir": 150,
+    "wspd": 12,
+    "wgst": null,
+    "wshearHgt": null,
+    "wshearDir": null,
+    "wshearSpd": null,
+    "visib": "6+",
+    "altim": null,
+    "vertVis": null,
+    "wxString": "-SHRA",
+    "notDecoded": null,
+    "clouds": [
+     {
+      "cover": "SCT",
+      "base": 3500,
+      "type": null
+     }
+    ],
+    "icgTurb": [],
+    "temp": []
+   },
+   {
+    "timeFrom": 1790553600,
+    "timeTo": 1790596800,
+    "timeBec": null,
+    "fcstChange": "FM",
+    "probability": null,
+    "wdir": 130,
+    "wspd": 12,
+    "wgst": null,
+    "wshearHgt": null,
+    "wshearDir": null,
+    "wshearSpd": null,
+    "visib": "6+",
+    "altim": null,
+    "vertVis": null,
+    "wxString": "NSW",
+    "notDecoded": null,
+    "clouds": [
+     {
+      "cover": "SCT",
+      "base": 4500,
+      "type": null
+     }
+    ],
+    "icgTurb": [],
+    "temp": []
+   },
+   {
+    "timeFrom": 1790596800,
+    "timeTo": 1790618400,
+    "timeBec": null,
+    "fcstChange": "FM",
+    "probability": null,
+    "wdir": 290,
+    "wspd": 6,
+    "wgst": null,
+    "wshearHgt": null,
+    "wshearDir": null,
+    "wshearSpd": null,
+    "visib": "6+",
+    "altim": null,
+    "vertVis": null,
+    "wxString": null,
+    "notDecoded": null,
+    "clouds": [
+     {
+      "cover": "SCT",
+      "base": 3000,
+      "type": null
+     }
+    ],
+    "icgTurb": [],
+    "temp": []
+   }
+  ]
+ }
+]

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aviation-data-analysis"
+version = "0.1.0"
+description = "Weather, NOTAM and ADS-B flight-path analysis for Australian, Singapore and Hong Kong airports"
+requires-python = ">=3.10"
+dependencies = [
+  "duckdb>=1.1",
+  "requests>=2.31",
+  "pyyaml>=6.0",
+  "dbt-core>=1.12.5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "dbt-duckdb>=1.9",
+  "pytest>=8.0",
+]
+
+[project.scripts]
+aviation = "aviation.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,77 @@
+name: ci-cd
+
+# test:   every push and pull request. Unit tests plus a full dbt build on a temporary
+#         DuckDB file (tests/test_dbt_models.py).
+# deploy: pushes to main (or a manual run on main), after tests pass. Builds the dbt
+#         project into MotherDuck so model and seed changes go live before the next
+#         scheduled ingest.
+# Required secret (repository or `production` environment): MOTHERDUCK_TOKEN
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the documented setup; 3.14 matches the local uv environment.
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - run: uv run pytest -q
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    # Same group as ingest.yml: one writer at a time against the warehouse.
+    concurrency:
+      group: warehouse-writer
+      cancel-in-progress: false
+    env:
+      WAREHOUSE: md:aviation
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+
+      - name: Check MotherDuck token
+        run: |
+          if [ -z "$MOTHERDUCK_TOKEN" ]; then
+            echo "::error::MOTHERDUCK_TOKEN secret is not set"
+            exit 1
+          fi
+
+      - name: Create MotherDuck database if missing
+        run: |
+          uv run python -c "
+          import duckdb, os
+          db = os.environ['WAREHOUSE'].removeprefix('md:')
+          duckdb.connect('md:').execute(f'create database if not exists {db}')
+          "
+
+      # Seeds are small reference tables. Recreating them lets a seed gain or lose
+      # columns without a manual --full-refresh against production.
+      - name: dbt seed (full refresh)
+        working-directory: dbt
+        run: uv run dbt seed --full-refresh --profiles-dir .
+
+      - name: dbt build
+        working-directory: dbt
+        run: uv run dbt build --profiles-dir .
