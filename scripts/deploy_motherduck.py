@@ -1,6 +1,6 @@
 """Publish the MotherDuck Flight and Dive from this checkout.
 
-    python scripts/deploy_motherduck.py [--sha SHA] [--only flight|dive]
+    python scripts/deploy_motherduck.py [--sha SHA] [--only flight|dive ...]
 
 Runs in the ci.yml deploy job on every push to main; can also be run locally with
 MOTHERDUCK_TOKEN set. Both objects are matched by name, so the first run creates them and
@@ -128,20 +128,22 @@ def deploy_dive(con: duckdb.DuckDBPyConnection, sha: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sha", help="commit the Flight runs (default: HEAD)")
-    parser.add_argument("--only", choices=["flight", "dive"])
+    parser.add_argument("--only", choices=["flight", "dive"], action="append",
+                        help="publish only this; repeatable (default: both)")
     args = parser.parse_args()
 
     sha = git("rev-parse", args.sha or "HEAD")
-    if args.only != "dive" and not os.environ.get("GITHUB_ACTIONS"):
+    steps = {"flight": deploy_flight, "dive": deploy_dive}
+    targets = args.only or list(steps)
+    if "flight" in targets and not os.environ.get("GITHUB_ACTIONS"):
         if not git("branch", "-r", "--contains", sha):
             raise SystemExit(f"{sha[:7]} is not on GitHub yet; push it first, since the "
                              f"Flight downloads that commit.")
 
     con = duckdb.connect("md:")
-    steps = {"flight": deploy_flight, "dive": deploy_dive}
     failed = []
     for name, deploy in steps.items():
-        if args.only in (None, name):
+        if name in targets:
             # The Dive does not depend on the Flight, so one failing must not skip the other.
             try:
                 deploy(con, sha)

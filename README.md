@@ -102,7 +102,7 @@ The Dive queries `md:aviation` directly, so viewers need access to that database
 
 ### Deploying
 
-`scripts/deploy_motherduck.py` (or `make deploy-motherduck`) publishes both. It matches the Flight by name and the Dive by title, creates them if missing and updates them otherwise; every update is a new version in MotherDuck. The two are published independently, so a Flight failure does not stop the Dive. Run locally, it refuses a commit that is not yet on GitHub, because the Flight would fail to download it.
+`scripts/deploy_motherduck.py` (or `make deploy-motherduck`) publishes both. It matches the Flight by name and the Dive by title, creates them if missing and updates them otherwise; every update is a new version in MotherDuck. The two are published independently, so a Flight failure does not stop the Dive. Run locally, it refuses a commit that is not yet on GitHub, because the Flight would fail to download it. Pass `--only flight` or `--only dive` to publish one. In CI, a push to main deploys only what it changed: dbt seed + build when `dbt/` (or the pinned dbt version in `pyproject.toml` / `uv.lock`) changed, the Flight when `flights/`, `src/`, `dbt/` or `config/` changed (the Flight runs those from its pinned commit), the Dive when `dives/` changed; a manual run does all three.
 
 `ci.yml` is the CI/CD pipeline:
 

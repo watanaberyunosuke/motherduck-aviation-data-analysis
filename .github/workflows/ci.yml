@@ -7,6 +7,8 @@ name: ci-cd
 #         scheduled ingest, then publishes the aviation_pipeline Flight (pinned to this
 #         commit) and the Airport conditions Dive (scripts/deploy_motherduck.py), then
 #         runs the Flight once (METAR + dbt) and fails if that run fails.
+#         dbt, the Flight and the Dive each only run when the push changed their files
+#         (see "Detect changes"); a manual run does all three.
 # Required secrets (repository or `production` environment): MOTHERDUCK_TOKEN,
 # OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET (copied into the Flight's `opensky` secret)
 
@@ -48,11 +50,41 @@ jobs:
       MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # full history, to diff against the commit before this push
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: "3.11"
           enable-cache: true
       - run: uv sync --frozen --extra dev
+
+      # Diffs the whole push (github.event.before..GITHUB_SHA), so re-running a failed
+      # deploy retries the same changes. pyproject.toml / uv.lock pin the dbt version
+      # CI builds with. The Flight downloads its pinned commit and runs src/, dbt/ and
+      # config/ from it, so those count as Flight changes: skipping them would leave the
+      # hourly run rebuilding the previous models. Manual runs, new branches and force
+      # pushes (no usable `before`) run everything.
+      - name: Detect changes
+        id: changes
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          dbt_paths="dbt pyproject.toml uv.lock"
+          flight_paths="flights/aviation_pipeline src/aviation dbt config scripts/deploy_motherduck.py"
+          dive_paths="dives/airport_conditions scripts/deploy_motherduck.py"
+          if [ "$GITHUB_EVENT_NAME" != push ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "no previous commit to compare against; running everything"
+            dbt=true; flight=true; dive=true
+          else
+            dbt=false; flight=false; dive=false
+            git diff --quiet "$BEFORE" "$GITHUB_SHA" -- $dbt_paths || dbt=true
+            git diff --quiet "$BEFORE" "$GITHUB_SHA" -- $flight_paths || flight=true
+            git diff --quiet "$BEFORE" "$GITHUB_SHA" -- $dive_paths || dive=true
+          fi
+          echo "dbt changed: $dbt, flight changed: $flight, dive changed: $dive"
+          echo "dbt=$dbt" >> "$GITHUB_OUTPUT"
+          echo "flight=$flight" >> "$GITHUB_OUTPUT"
+          echo "dive=$dive" >> "$GITHUB_OUTPUT"
 
       - name: Check MotherDuck token
         run: |
@@ -72,23 +104,33 @@ jobs:
       # Seeds are small reference tables. Recreating them lets a seed gain or lose
       # columns without a manual --full-refresh against production.
       - name: dbt seed (full refresh)
+        if: steps.changes.outputs.dbt == 'true'
         working-directory: dbt
         run: uv run dbt seed --full-refresh --profiles-dir .
 
       - name: dbt build
+        if: steps.changes.outputs.dbt == 'true'
         working-directory: dbt
         run: uv run dbt build --profiles-dir .
 
       # Points the hourly Flight at this commit (and refreshes its OpenSky secret), then
       # publishes the Dive. Runs after dbt so the Dive never queries a mart that isn't built.
       - name: Publish MotherDuck Flight and Dive
+        if: steps.changes.outputs.flight == 'true' || steps.changes.outputs.dive == 'true'
         env:
           OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
           OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
-        run: uv run python scripts/deploy_motherduck.py --sha "$GITHUB_SHA"
+          FLIGHT: ${{ steps.changes.outputs.flight }}
+          DIVE: ${{ steps.changes.outputs.dive }}
+        run: |
+          only=()
+          if [ "$FLIGHT" = true ]; then only+=(--only flight); fi
+          if [ "$DIVE" = true ]; then only+=(--only dive); fi
+          uv run python scripts/deploy_motherduck.py --sha "$GITHUB_SHA" "${only[@]}"
 
       # Smoke test the published Flight: one METAR ingest then dbt build, in the Flight
       # runtime. Catches failures that only show up there (e.g. ingest and dbt sharing a
       # process) on the push that causes them, not at the next hourly run.
       - name: Run Flight once
+        if: steps.changes.outputs.flight == 'true'
         run: uv run python scripts/run_flight.py --sources metar
