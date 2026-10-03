@@ -71,7 +71,7 @@ Credentials:
 
 ### Flight: `aviation_pipeline`
 
-A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs the pipeline at :07 every hour (UTC). Each run downloads the commit it is pinned to from GitHub, runs the ingest sources due that hour, then `dbt build`. Ingest and dbt run in one process, so they never write to the warehouse at the same time.
+A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs the pipeline at :07 every hour (UTC), started by the GitHub Actions cron in `.github/workflows/ingest.yml` (`scripts/run_flight.py`). MotherDuck only schedules Flights on a Business plan, so the Flight is published unscheduled and GitHub triggers it with `md_run_flight`, waits for the run and prints its logs; a failed run fails the workflow. Each run downloads the commit it is pinned to from GitHub, runs the ingest sources due that hour, then `dbt build`. Ingest and dbt run in one process, so they never write to the warehouse at the same time.
 
 | UTC hour | Sources |
 |---|---|
@@ -88,9 +88,9 @@ select * from md_list_flight_runs(flight_id := '<id>') order by run_number desc 
 select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
 ```
 
-`SOURCES` takes space-separated sources (`metar taf notam-hk opensky`), or `none` for dbt only. Cron scheduling needs a MotherDuck plan that includes scheduled Flights (Lite unlimited, Business or Enterprise).
+`SOURCES` takes space-separated sources (`metar taf notam-hk opensky`), or `none` for dbt only.
 
-`.github/workflows/ingest.yml` is now a manual fallback (`workflow_dispatch` only) that runs one source and dbt from GitHub Actions.
+From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `runner: github` runs ingest and dbt on the GitHub runner instead of the Flight, as a fallback if the Flight is unavailable.
 
 ### Dive: Airport conditions
 
@@ -102,14 +102,14 @@ The Dive queries `md:aviation` directly, so viewers need access to that database
 
 ### Deploying
 
-`scripts/deploy_motherduck.py` (or `make deploy-motherduck`) publishes both. It matches the Flight by name and the Dive by title, creates them if missing and updates them otherwise; every update is a new version in MotherDuck. Run locally, it refuses a commit that is not yet on GitHub, because the Flight would fail to download it.
+`scripts/deploy_motherduck.py` (or `make deploy-motherduck`) publishes both. It matches the Flight by name and the Dive by title, creates them if missing and updates them otherwise; every update is a new version in MotherDuck. The two are published independently, so a Flight failure does not stop the Dive. Run locally, it refuses a commit that is not yet on GitHub, because the Flight would fail to download it.
 
 `ci.yml` is the CI/CD pipeline:
 
 - **test**: on every push and pull request, runs `pytest` (including a full dbt build on a temporary DuckDB file) on Python 3.11 and 3.14.
 - **deploy**: on pushes to `main`, after tests pass, rebuilds seeds and runs `dbt build` against MotherDuck (`md:aviation`), creating the database if it does not exist. It then points the Flight at the new commit and publishes the Dive. It uses the `production` environment, so you can add required reviewers under Settings > Environments. It needs the `MOTHERDUCK_TOKEN`, `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` secrets.
 
-Deploy and the manual ingest workflow share a concurrency group, so they never write to the warehouse at the same time. The Flight is outside that group: a deploy that lands at :07 can overlap the hourly run. If dbt then fails on a conflicting write, the next hourly run rebuilds. Both install dependencies from `uv.lock`; after changing dependencies in `pyproject.toml`, run `uv lock` and commit the lockfile.
+Deploy and the ingest workflow share a concurrency group, so they never write to the warehouse at the same time. Because the ingest job waits for the Flight run, the group covers the Flight too, unless you start a run directly with `md_run_flight`. Both install dependencies from `uv.lock`; after changing dependencies in `pyproject.toml`, run `uv lock` and commit the lockfile.
 
 ## 6. Known limitations
 
@@ -131,6 +131,7 @@ Deploy and the manual ingest workflow share a concurrency group, so they never w
 | `SchemaMismatch` from RapidAPI (if re-enabled) | Provider changed its response. Inspect one raw response and update `notam_rapidapi.rows`. |
 | Days or hours look shifted | dbt forces `TimeZone: UTC` in `profiles.yml`. Ad hoc DuckDB sessions do not: run `set TimeZone='UTC'`. |
 | Deploy fails on a seed column change | Should not happen: deploy runs `dbt seed --full-refresh`. Scheduled ingest runs do not, so let a deploy finish before the next ingest. |
+| `Scheduled runs are not available on your plan` | The Flight was published with a cron. The deploy no longer sets one; GitHub Actions triggers the runs. |
 | Flight run failed | `select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>)`. Each source prints `FAILED - <reason>`; the run fails if any source or dbt failed. |
 | Deploy: `Flight secret 'opensky' does not exist` | Add `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` as GitHub secrets (or export them locally) and re-run. |
 | Dive shows `Catalog does not exist` | The viewer cannot see `md:aviation`. Share the database with them. |

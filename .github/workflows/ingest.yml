@@ -1,23 +1,34 @@
 name: ingest
 
-# Manual fallback only. Scheduled ingest runs as the MotherDuck Flight `aviation_pipeline`
-# (flights/aviation_pipeline/main.py), deployed by the ci.yml deploy job. Use this when
-# the Flight is unavailable, or to re-run a source from GitHub.
+# Hourly trigger for the MotherDuck Flight `aviation_pipeline`
+# (flights/aviation_pipeline/main.py, deployed by the ci.yml deploy job). MotherDuck only
+# schedules Flights on a Business plan, so this cron starts each run with md_run_flight
+# (scripts/run_flight.py) and waits for it; a failed Flight run fails this workflow.
+# The Flight picks this hour's sources itself (METAR + TAF hourly, HK NOTAMs every 3 h,
+# OpenSky at 06 UTC) and then runs dbt build.
 #
-# GitHub runners are ephemeral, so this writes to MotherDuck (WAREHOUSE=md:aviation).
-# Required repository secrets:
-#   MOTHERDUCK_TOKEN, OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET
+# Manual runs can pick sources, and `runner: github` runs ingest + dbt on the GitHub
+# runner instead, as a fallback if the Flight is unavailable.
+# Required repository secrets: MOTHERDUCK_TOKEN (and OPENSKY_CLIENT_ID /
+# OPENSKY_CLIENT_SECRET for the github runner; the Flight uses its own `opensky` secret).
 on:
+  schedule:
+    - cron: "7 * * * *"  # UTC, off the hour (GitHub delays jobs queued at :00)
   workflow_dispatch:
     inputs:
       source:
-        description: "Source to ingest"
+        description: "Sources to ingest (hourly = this hour's Flight plan)"
         type: choice
-        options: [metar, taf, notam-hk, opensky, all]
-        default: all
+        options: [hourly, metar, taf, notam-hk, opensky, all, none]
+        default: hourly
+      runner:
+        description: "Where to run"
+        type: choice
+        options: [flight, github]
+        default: flight
 
-# One writer at a time with the deploy job in ci.yml. This does not cover the Flight,
-# which runs at :07 each hour; avoid starting this around then.
+# One writer at a time with the deploy job in ci.yml. The trigger waits for the Flight,
+# so the group covers Flight runs too.
 concurrency:
   group: warehouse-writer
   cancel-in-progress: false
@@ -25,11 +36,10 @@ concurrency:
 env:
   WAREHOUSE: md:aviation
   MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
-  OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
-  OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
 
 jobs:
-  ingest:
+  flight:
+    if: github.event_name == 'schedule' || inputs.runner == 'flight'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -40,10 +50,48 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen --extra dev
 
+      - name: Run Flight and wait
+        env:
+          SOURCE: ${{ inputs.source || 'hourly' }}
+        run: |
+          case "$SOURCE" in
+            hourly) sources="" ;;
+            all)    sources="metar taf notam-hk opensky" ;;
+            *)      sources="$SOURCE" ;;
+          esac
+          uv run python scripts/run_flight.py --sources "$sources"
+
+  github:
+    if: github.event_name == 'workflow_dispatch' && inputs.runner == 'github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
+      OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+
       - name: Ingest
+        if: inputs.source != 'none'
         env:
           SOURCE: ${{ inputs.source }}
-        run: uv run aviation ingest "$SOURCE"
+        run: |
+          if [ "$SOURCE" = hourly ]; then
+            # Same plan as the Flight's sources_for_hour.
+            h=$(date -u +%-H); SOURCE="metar taf"
+            [ $((h % 3)) -eq 0 ] && SOURCE="$SOURCE notam-hk"
+            [ "$h" -eq 6 ] && SOURCE="$SOURCE opensky"
+          fi
+          status=0
+          for s in $SOURCE; do
+            uv run aviation ingest "$s" || status=1
+          done
+          exit $status
 
       # Rebuild marts even if one source failed, so the others still land.
       - name: dbt build
