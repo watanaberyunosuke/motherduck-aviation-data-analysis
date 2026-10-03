@@ -29,8 +29,9 @@ opensky:
   # Track only flights whose origin AND destination are both in the airport list above.
   # These are the routes we can build a baseline for.
   track_in_scope_routes_only: true
-  # Hard cap on /tracks calls per run, independent of the API's own quota.
-  max_tracks_per_run: 400
+  # Hard cap on /tracks calls per run, independent of the API's own quota. Each call
+  # costs several tracks credits (4-30 seen), not one, so keep this modest.
+  max_tracks_per_run: 100
   # Stop calling OpenSky when X-Rate-Limit-Remaining falls below this.
   min_credits_remaining: 200
 
