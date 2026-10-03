@@ -1,4 +1,4 @@
-.PHONY: setup ingest-weather ingest-notams ingest-flights ingest-all transform test all
+.PHONY: setup ingest-weather ingest-notams ingest-flights ingest-all transform test all deploy-motherduck
 
 # Pick up WAREHOUSE / MOTHERDUCK_TOKEN from .env and hand dbt an absolute path,
 # because dbt runs from the dbt/ directory.
@@ -33,3 +33,8 @@ test:
 	pytest -q
 
 all: ingest-all transform
+
+# Publish the aviation_pipeline Flight (pinned to HEAD, which must be pushed) and the
+# Airport conditions Dive. CI does this on every push to main.
+deploy-motherduck:
+	python scripts/deploy_motherduck.py
