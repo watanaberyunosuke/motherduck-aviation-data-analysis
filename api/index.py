@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import os
 
+# Vercel's Python sandbox doesn't set $HOME, which duckdb needs (for its extension
+# cache, the motherduck extension in particular) before it will attach an md: target.
+os.environ.setdefault("HOME", "/tmp")
+
 import duckdb
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
