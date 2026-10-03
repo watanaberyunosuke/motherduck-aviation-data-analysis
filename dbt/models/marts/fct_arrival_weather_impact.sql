@@ -1,6 +1,6 @@
--- The analysis table: each well-covered arrival at an in-scope airport, the weather and
--- NOTAM conditions at the time, and how its terminal-area time compares with the
--- destination's recent baseline.
+-- The analysis table: each well-covered arrival at an in-scope airport, from any origin,
+-- the weather and NOTAM conditions at the time, and how its terminal-area time compares
+-- with the destination's recent baseline.
 {% set baseline_days = var('baseline_days') %}
 {% set metar_max_age = var('metar_max_age_minutes') %}
 
@@ -8,7 +8,7 @@ with arrivals as (
     select m.*, a.notam_source is not null as has_notam_feed
     from {{ ref('fct_flight_track_metrics') }} m
     join {{ ref('airports') }} a on a.icao = m.arrival_icao
-    where m.has_full_coverage
+    where m.has_arrival_coverage
       and m.terminal_entry_at is not null
 ),
 
@@ -54,9 +54,12 @@ select
     icao24,
     track_start_epoch,
     callsign,
+    flight_number_iata,
     route,
     departure_icao,
+    departure_iata,
     arrival_icao,
+    arrival_iata,
     last_airborne_at                                   as arrived_at,
     terminal_minutes,
     route_inefficiency,

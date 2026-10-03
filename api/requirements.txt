@@ -1,0 +1,3 @@
+# Dependencies of the Vercel function only (api/index.py); the pipeline uses pyproject.toml.
+duckdb>=1.5
+fastapi>=0.115

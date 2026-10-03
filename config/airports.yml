@@ -26,9 +26,9 @@ opensky:
   # Flights endpoints are batch-processed overnight by OpenSky, so pull whole UTC days
   # that have already finished. 1 = yesterday.
   days_back: 1
-  # Track only flights whose origin AND destination are both in the airport list above.
-  # These are the routes we can build a baseline for.
-  track_in_scope_routes_only: true
+  # Track only flights arriving at an airport in the list above, from any origin. Those
+  # are the arrivals the terminal-time baseline is built for.
+  track_arrivals_only: true
   # Hard cap on /tracks calls per run, independent of the API's own quota. Each call
   # costs several tracks credits (4-30 seen), not one, so keep this modest.
   max_tracks_per_run: 100

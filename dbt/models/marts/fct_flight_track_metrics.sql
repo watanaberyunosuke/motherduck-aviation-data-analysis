@@ -2,6 +2,8 @@
 -- and how long it spent inside the destination terminal area before landing.
 -- Terminal-area time is the weather-sensitive part of a flight (holding, vectoring,
 -- go-arounds), so it stands in for delay, which OpenSky cannot measure (no schedules).
+-- Airport coordinates come from the worldwide airport_codes seed, so flights from
+-- origins outside the in-scope list are measured too.
 {% set terminal_km = var('terminal_radius_km') %}
 
 with points as (
@@ -18,8 +20,11 @@ tracks as (
         t.icao24,
         t.track_start_epoch,
         f.callsign,
+        f.flight_number_iata,
         f.departure_icao,
+        f.departure_iata,
         f.arrival_icao,
+        f.arrival_iata,
         f.route
     from (select distinct icao24, track_start_epoch from points) t
     join flights f
@@ -44,8 +49,8 @@ airborne as (
         lag(p.point_at) over w as prev_at
     from points p
     join tracks tr using (icao24, track_start_epoch)
-    left join {{ ref('airports') }} dep on dep.icao = tr.departure_icao
-    left join {{ ref('airports') }} arr on arr.icao = tr.arrival_icao
+    left join {{ ref('airport_codes') }} dep on dep.icao = tr.departure_icao
+    left join {{ ref('airport_codes') }} arr on arr.icao = tr.arrival_icao
     where not p.on_ground and p.lat is not null and p.lon is not null
     window w as (partition by p.icao24, p.track_start_epoch order by p.point_at)
 ),
@@ -71,6 +76,7 @@ per_track as (
         sum(segment_km)                                            as path_km,
         max(gap_minutes)                                           as max_gap_minutes,
         arg_min(km_from_departure, point_at)                       as first_point_km_from_departure,
+        arg_min(km_to_arrival, point_at)                           as first_point_km_from_arrival,
         arg_max(km_to_arrival, point_at)                           as last_point_km_from_arrival,
         min(point_at) filter (where km_to_arrival <= {{ terminal_km }}) as terminal_entry_at
     from segments
@@ -81,8 +87,11 @@ select
     tr.icao24,
     tr.track_start_epoch,
     tr.callsign,
+    tr.flight_number_iata,
     tr.departure_icao,
+    tr.departure_iata,
     tr.arrival_icao,
+    tr.arrival_iata,
     tr.route,
     pt.first_airborne_at,
     pt.last_airborne_at,
@@ -97,10 +106,14 @@ select
     date_diff('second', pt.terminal_entry_at, pt.last_airborne_at) / 60.0  as terminal_minutes,
     pt.first_point_km_from_departure,
     pt.last_point_km_from_arrival,
-    -- Only trust terminal time when the track is seen close to the runway at both ends.
+    -- Path length and route inefficiency need the track seen near both runways.
     coalesce(pt.first_point_km_from_departure <= 30
-             and pt.last_point_km_from_arrival <= 30, false)               as has_full_coverage
+             and pt.last_point_km_from_arrival <= 30, false)               as has_full_coverage,
+    -- Terminal time only needs the arrival end: seen outside the terminal area before
+    -- entering it, and close to the runway at the end. The departure can be anywhere.
+    coalesce(pt.first_point_km_from_arrival > {{ terminal_km }}
+             and pt.last_point_km_from_arrival <= 30, false)               as has_arrival_coverage
 from tracks tr
 join per_track pt using (icao24, track_start_epoch)
-left join {{ ref('airports') }} dep on dep.icao = tr.departure_icao
-left join {{ ref('airports') }} arr on arr.icao = tr.arrival_icao
+left join {{ ref('airport_codes') }} dep on dep.icao = tr.departure_icao
+left join {{ ref('airport_codes') }} arr on arr.icao = tr.arrival_icao

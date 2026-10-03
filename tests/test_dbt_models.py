@@ -1,9 +1,11 @@
 """Runs the full dbt project against a throwaway DuckDB file.
 
 OpenSky data here is SYNTHETIC: three Sydney -> Melbourne flights built in Python, the
-last one with a 12-minute hold inside the Melbourne terminal area and an IFR METAR. The
-expected distances and times are computed independently in Python and compared with
-what the SQL produces. Weather and NOTAM inputs are real captured responses.
+last one with a 12-minute hold inside the Melbourne terminal area and an IFR METAR, then
+an Auckland -> Melbourne arrival whose track is only seen near Melbourne, and an untracked
+light aircraft. The expected distances and times are computed independently in Python
+and compared with what the SQL produces. Weather and NOTAM inputs are real captured
+responses.
 """
 import json
 import math
@@ -51,6 +53,15 @@ def synthetic_track(depart: datetime, hold_minutes: int):
                 t += 60
     path = [[p[0], p[1], p[2], 3000.0, 225.0, False] for p in points]
     return path
+
+
+def approach_track(start: datetime, from_pos, minutes: int):
+    """Straight line from `from_pos` to YMML, one point per minute: the arrival end only."""
+    t = int(start.timestamp())
+    return [[t + 60 * i,
+             from_pos[0] + (YMML[0] - from_pos[0]) * i / minutes,
+             from_pos[1] + (YMML[1] - from_pos[1]) * i / minutes, 3000.0, 250.0, False]
+            for i in range(minutes + 1)]
 
 
 def expected_metrics(path):
@@ -101,6 +112,31 @@ def built(tmp_path_factory):
                         "visib": 1.5 if ifr else "6+", "wxString": "TSRA" if ifr else None,
                         "clouds": [{"cover": "OVC", "base": 400}] if ifr else [],
                         "rawOb": "SYNTHETIC"}}], ["icao", "obs_time"])
+
+    # Auckland -> Melbourne, first seen ~300 km east of Melbourne (no departure coverage).
+    path = approach_track(day + timedelta(hours=8), (YMML[0], YMML[1] + 3.4), 40)
+    expected["7c0003"] = expected_metrics(path)
+    start, end = path[0][0], path[-1][0]
+    flights.append({"icao24": "7c0003", "first_seen": start - 3 * 3600, "last_seen": end + 120,
+                    "callsign": "ANZ0123 ", "est_departure_airport": "NZAA",
+                    "est_arrival_airport": "YMML", "fetched_at": warehouse.utcnow(),
+                    "payload": {"synthetic": True}})
+    warehouse.upsert(con, "raw.opensky_tracks", [{
+        "icao24": "7c0003", "start_time": start, "end_time": end, "callsign": "ANZ0123",
+        "fetched_at": warehouse.utcnow(),
+        "payload": {"icao24": "7c0003", "startTime": start, "endTime": end, "path": path}}],
+        ["icao24", "start_time"])
+    # An alphanumeric ATC callsign: not a flight number, so it must not map.
+    flights.append({"icao24": "7c0005", "first_seen": start + 600, "last_seen": end + 900,
+                    "callsign": "QLK10D", "est_departure_airport": "YSSY",
+                    "est_arrival_airport": "YMML", "fetched_at": warehouse.utcnow(),
+                    "payload": {"synthetic": True}})
+    # A light aircraft with a registration callsign and no track.
+    t = int((day + timedelta(hours=10)).timestamp())
+    flights.append({"icao24": "7c0004", "first_seen": t, "last_seen": t + 3600,
+                    "callsign": "VHABC", "est_departure_airport": "YMMB",
+                    "est_arrival_airport": "YMML", "fetched_at": warehouse.utcnow(),
+                    "payload": {"synthetic": True}})
     warehouse.upsert(con, "raw.opensky_flights", flights, ["icao24", "first_seen"])
     con.close()
 
@@ -118,15 +154,21 @@ def built(tmp_path_factory):
 def test_track_metrics_match_independent_python(built):
     con, expected = built
     rows = con.execute("""select icao24, path_km, terminal_minutes, great_circle_km,
-                                 route_inefficiency, has_full_coverage
+                                 route_inefficiency, has_full_coverage, has_arrival_coverage
                           from marts.fct_flight_track_metrics order by icao24""").fetchall()
-    assert len(rows) == 3
-    for icao24, path_km, terminal_min, gc_km, ineff, full in rows:
+    assert len(rows) == 4
+    for icao24, path_km, terminal_min, gc_km, ineff, full, arrival in rows:
         exp_path, exp_terminal = expected[icao24]
         assert path_km == pytest.approx(exp_path, rel=1e-6)
         assert terminal_min == pytest.approx(exp_terminal, abs=1e-6)
-        assert gc_km == pytest.approx(haversine(YSSY, YMML), rel=1e-6)
-        assert full
+        assert arrival
+        if icao24 == "7c0003":
+            # Auckland is in airport_codes, so the great circle is known, but the track
+            # starts 300 km out: no departure coverage.
+            assert gc_km == pytest.approx(2600, rel=0.05) and not full
+        else:
+            assert gc_km == pytest.approx(haversine(YSSY, YMML), rel=1e-3)
+            assert full
     held = dict((r[0], r[4]) for r in rows)["7c0002"]
     straight = dict((r[0], r[4]) for r in rows)["7c0000"]
     assert held > straight, "a holding pattern must increase route inefficiency"
@@ -137,8 +179,8 @@ def test_arrival_impact_flags_hold_against_baseline(built):
     rows = con.execute("""select icao24, excess_terminal_minutes, baseline_flights, is_ifr,
                                  has_thunderstorm, has_current_metar, wind_gust_kt
                           from marts.fct_arrival_weather_impact order by arrived_at""").fetchall()
-    assert [r[0] for r in rows] == ["7c0000", "7c0001", "7c0002"]
-    first, second, held = rows
+    assert [r[0] for r in rows] == ["7c0000", "7c0001", "7c0002", "7c0003"]
+    first, second, held, _ = rows
     assert first[2] == 0 and first[1] is None, "first flight has no baseline yet"
     exp_excess = expected["7c0002"][1] - expected["7c0000"][1]
     assert held[1] == pytest.approx(exp_excess, abs=1e-6)
@@ -161,3 +203,32 @@ def test_weather_hourly_from_real_metars(built):
     n, cats = con.execute("""select count(*), list(distinct flight_category)
                              from marts.fct_airport_weather_hourly""").fetchone()
     assert n > 0 and set(cats) <= {"VFR", "MVFR", "IFR", "LIFR", None}
+
+
+def test_iata_codes_stored_alongside_icao(built):
+    con, _ = built
+    rows = con.execute("""select icao24, callsign, flight_number_iata, departure_icao,
+                                 departure_iata, arrival_icao, arrival_iata
+                          from marts.fct_arrivals order by icao24""").fetchall()
+    by_id = {r[0]: r[1:] for r in rows}
+    assert by_id["7c0000"] == ("QFA400", "QF400", "YSSY", "SYD", "YMML", "MEL")
+    assert by_id["7c0003"] == ("ANZ0123", "NZ123", "NZAA", "AKL", "YMML", "MEL")
+    # Registrations and alphanumeric ATC callsigns are not airline flight numbers.
+    assert by_id["7c0004"][:2] == ("VHABC", None)
+    assert by_id["7c0005"][:2] == ("QLK10D", None)
+
+    impact = con.execute("""select icao24, flight_number_iata, arrival_iata
+                            from marts.fct_arrival_weather_impact order by icao24""").fetchall()
+    assert impact[0] == ("7c0000", "QF400", "MEL")
+    hourly = con.execute("""select count(*), count(iata) from marts.fct_airport_weather_hourly""").fetchone()
+    assert hourly[0] == hourly[1] > 0
+
+
+def test_arrivals_include_every_origin(built):
+    con, expected = built
+    rows = con.execute("""select icao24, terminal_minutes from marts.fct_arrivals
+                          where arrival_icao = 'YMML' order by arrived_at""").fetchall()
+    assert [r[0] for r in rows] == ["7c0000", "7c0001", "7c0002", "7c0003", "7c0005", "7c0004"]
+    terminal = dict(rows)
+    assert terminal["7c0003"] == pytest.approx(expected["7c0003"][1], abs=1e-6)
+    assert terminal["7c0004"] is None, "untracked arrivals are listed without terminal metrics"
