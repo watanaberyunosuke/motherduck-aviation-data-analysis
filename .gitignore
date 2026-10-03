@@ -9,3 +9,4 @@ dbt/logs/
 dbt/dbt_packages/
 .venv/
 dbt/.user.yml
+.vercel
