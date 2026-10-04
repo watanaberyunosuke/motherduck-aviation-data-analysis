@@ -143,7 +143,7 @@ def _get_json(url: str, headers: dict, timeout: float):
 def _from_opensky(lat: float, lon: float) -> list[dict]:
     query = urllib.parse.urlencode({"lamin": lat - LIVE_BOX_DEG, "lamax": lat + LIVE_BOX_DEG,
                                     "lomin": lon - LIVE_BOX_DEG, "lomax": lon + LIVE_BOX_DEG})
-    payload = _get_json(f"{OPENSKY_STATES}?{query}", _opensky_auth(), timeout=8)
+    payload = _get_json(f"{OPENSKY_STATES}?{query}", _opensky_auth(), timeout=5)
     # State vector fields: https://openskynetwork.github.io/opensky-api/rest.html
     return [{
         "icao24": s[0],
@@ -174,6 +174,12 @@ def _from_adsb_lol(lat: float, lon: float) -> list[dict]:
     } for a in payload.get("ac") or [] if a.get("lat") is not None and a.get("lon") is not None]
 
 
+# After a source fails, skip it for a while in this instance, so viewers don't wait for
+# its timeout on every call (OpenSky times out from Vercel). It is retried afterwards.
+SKIP_AFTER_FAILURE_S = 15 * 60
+_skip_until: dict[str, float] = {}
+
+
 def _why(exc: Exception) -> str:
     if isinstance(exc, urllib.error.HTTPError):
         return "quota used up" if exc.code == 429 else f"HTTP {exc.code}"
@@ -194,12 +200,17 @@ def live(icao: str) -> JSONResponse:
 
     failures = []
     for source, fetch in (("OpenSky", _from_opensky), ("adsb.lol", _from_adsb_lol)):
+        if time.time() < _skip_until.get(source, 0):
+            failures.append(f"{source}: skipped after a recent failure")
+            continue
         try:
             aircraft = fetch(lat, lon)
         except Exception as exc:  # network, HTTP or payload errors: try the next source
+            _skip_until[source] = time.time() + SKIP_AFTER_FAILURE_S
             failures.append(f"{source}: {_why(exc)}")
             print(f"live {icao}: {failures[-1]}")
             continue
+        _skip_until.pop(source, None)
         return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
                              "failed": failures}, headers=LIVE_HEADERS)
     return _live_error(502, "; ".join(failures))
