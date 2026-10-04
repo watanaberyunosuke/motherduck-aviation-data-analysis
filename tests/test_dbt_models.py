@@ -3,9 +3,9 @@
 OpenSky data here is SYNTHETIC: three Sydney -> Melbourne flights built in Python, the
 last one with a 12-minute hold inside the Melbourne terminal area and an IFR METAR, then
 an Auckland -> Melbourne arrival whose track is only seen near Melbourne, and an untracked
-light aircraft. Brisbane gets a synthetic AeroDataBox board for one day (one flown flight,
-one cancellation) with OpenSky's copy of the same flight, which must give way, and an
-OpenSky arrival on a day AeroDataBox has not loaded, which must stay. The expected distances and times are computed independently in Python
+light aircraft. Brisbane gets synthetic AeroDataBox boards for two days (a flown flight
+and a cancellation each): on the first OpenSky has the same flight, so AeroDataBox's copy
+must give way; on the second OpenSky came back empty, so AeroDataBox's flight must stay. The expected distances and times are computed independently in Python
 and compared with what the SQL produces. Weather and NOTAM inputs are real captured
 responses.
 """
@@ -139,34 +139,36 @@ def built(tmp_path_factory):
                     "callsign": "VHABC", "est_departure_airport": "YMMB",
                     "est_arrival_airport": "YMML", "fetched_at": warehouse.utcnow(),
                     "payload": {"synthetic": True}})
-    # Brisbane, 21 Sep: AeroDataBox has loaded the slot, so its flight replaces OpenSky's.
-    board = {"arrivals": [
-        {"departure": {"airport": {"icao": "NZAA", "iata": "AKL"},
-                       "scheduledTime": {"utc": "2026-09-21 01:00Z"},
-                       "runwayTime": {"utc": "2026-09-21 01:15Z"}},
-         "arrival": {"scheduledTime": {"utc": "2026-09-21 04:00Z"},
-                     "revisedTime": {"utc": "2026-09-21 04:10Z"},
-                     "runwayTime": {"utc": "2026-09-21 04:12Z"}, "runway": "19R"},
-         "number": "NZ 145", "status": "Arrived",
-         "aircraft": {"reg": "ZK-NZA", "modeS": "C81234"},
-         "airline": {"name": "Air New Zealand", "iata": "NZ", "icao": "ANZ"}},
-        {"departure": {"airport": {"icao": "NZAA"}, "scheduledTime": {"utc": "2026-09-21 03:00Z"}},
-         "arrival": {"scheduledTime": {"utc": "2026-09-21 06:00Z"}},
-         "number": "JQ 200", "status": "Canceled", "airline": {"icao": "JST"}},
-    ], "departures": []}
-    warehouse.upsert(con, "raw.aerodatabox_flights", aerodatabox.flight_rows("YBBN", board),
-                     ["airport_icao", "direction", "flight_id"])
-    for direction in ("arrival", "departure"):
-        warehouse.mark_slot(con, "aerodatabox", "YBBN", direction, datetime(2026, 9, 21).date(), 1)
+    # Brisbane: an AeroDataBox board each for 21 and 22 Sep, one flown flight (12 min late)
+    # and one cancellation each.
+    for d, number, mode_s in ((21, 145, "C81234"), (22, 147, "C80999")):
+        board = {"arrivals": [
+            {"departure": {"airport": {"icao": "NZAA", "iata": "AKL"},
+                           "scheduledTime": {"utc": f"2026-09-{d} 01:00Z"},
+                           "runwayTime": {"utc": f"2026-09-{d} 01:15Z"}},
+             "arrival": {"scheduledTime": {"utc": f"2026-09-{d} 04:00Z"},
+                         "revisedTime": {"utc": f"2026-09-{d} 04:10Z"},
+                         "runwayTime": {"utc": f"2026-09-{d} 04:12Z"}, "runway": "19R"},
+             "number": f"NZ {number}", "status": "Arrived",
+             "aircraft": {"reg": "ZK-NZA", "modeS": mode_s},
+             "airline": {"name": "Air New Zealand", "iata": "NZ", "icao": "ANZ"}},
+            {"departure": {"airport": {"icao": "NZAA"}, "scheduledTime": {"utc": f"2026-09-{d} 03:00Z"}},
+             "arrival": {"scheduledTime": {"utc": f"2026-09-{d} 06:00Z"}},
+             "number": "JQ 200", "status": "Canceled", "airline": {"icao": "JST"}},
+        ], "departures": []}
+        warehouse.upsert(con, "raw.aerodatabox_flights", aerodatabox.flight_rows("YBBN", board),
+                         ["airport_icao", "direction", "flight_id"])
+        for direction in ("arrival", "departure"):
+            warehouse.mark_slot(con, "aerodatabox", "YBBN", direction, datetime(2026, 9, d).date(), 1)
+    # 21 Sep: OpenSky has the slot with the same flight, so its copy replaces AeroDataBox's.
+    # 22 Sep: OpenSky loaded the slot but saw nothing, so AeroDataBox's flight stays.
     adb_day = int(datetime(2026, 9, 21, tzinfo=timezone.utc).timestamp())
     flights.append({"icao24": "c81234", "first_seen": adb_day + 4800, "last_seen": adb_day + 15060,
                     "callsign": "ANZ145", "est_departure_airport": "NZAA",
                     "est_arrival_airport": "YBBN", "fetched_at": warehouse.utcnow(),
                     "payload": {"synthetic": True}})
-    flights.append({"icao24": "c80999", "first_seen": adb_day + 86400 + 3600,
-                    "last_seen": adb_day + 86400 + 14400, "callsign": "ANZ147",
-                    "est_departure_airport": "NZAA", "est_arrival_airport": "YBBN",
-                    "fetched_at": warehouse.utcnow(), "payload": {"synthetic": True}})
+    warehouse.mark_slot(con, "opensky", "YBBN", "arrival", datetime(2026, 9, 21).date(), 1)
+    warehouse.mark_slot(con, "opensky", "YBBN", "arrival", datetime(2026, 9, 22).date(), 0)
     warehouse.upsert(con, "raw.opensky_flights", flights, ["icao24", "first_seen"])
     con.close()
 
@@ -309,17 +311,18 @@ def test_terminal_tracks_stay_near_the_airport(built):
     assert all(r[3] <= 250 for r in rows)
 
 
-def test_aerodatabox_preferred_where_loaded_with_schedule_delay(built):
+def test_opensky_preferred_and_aerodatabox_fills_its_gaps_with_schedule_delay(built):
     con, _ = built
     rows = con.execute("""select source, icao24, callsign, flight_number_iata, departure_iata,
                                  strftime(arrived_at at time zone 'UTC', '%Y-%m-%d %H:%M'), delay_minutes
                           from marts.fct_arrivals where arrival_icao = 'YBBN'
                           order by arrived_at""").fetchall()
-    # 21 Sep: AeroDataBox's NZ145 (runway time, 12 min late); OpenSky's copy and the
-    # cancelled JQ200 are gone. 22 Sep: not loaded by AeroDataBox, so OpenSky's arrival.
+    # 21 Sep: OpenSky's NZ145 (no schedule); AeroDataBox's copy is gone. 22 Sep: OpenSky
+    # saw nothing, so AeroDataBox's NZ147 (runway time, 12 min late). Both cancelled JQ200s
+    # are gone.
     assert rows == [
-        ("aerodatabox", "c81234", "ANZ145", "NZ145", "AKL", "2026-09-21 04:12", 12.0),
-        ("opensky", "c80999", "ANZ147", "NZ147", "AKL", "2026-09-22 04:00", None),
+        ("opensky", "c81234", "ANZ145", "NZ145", "AKL", "2026-09-21 04:11", None),
+        ("aerodatabox", "c80999", "ANZ147", "NZ147", "AKL", "2026-09-22 04:12", 12.0),
     ]
     moves = con.execute("""select day_utc::varchar, arrivals from marts.fct_daily_airport_movements
                            where icao = 'YBBN' order by day_utc""").fetchall()

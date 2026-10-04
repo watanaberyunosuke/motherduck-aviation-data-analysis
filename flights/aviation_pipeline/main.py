@@ -4,7 +4,7 @@ One Flight runs weather and NOTAM ingest and dbt twice a day (ingest.yml starts 
 00:00 and 12:00 UTC; the free plan cannot schedule Flights). Running everything in one Flight means ingest and dbt never write
 to the warehouse at the same time; that was what the GitHub Actions concurrency group did
 before. Flights are not part of it: they load once a day on the GitHub runner (ingest.yml),
-outside the plan's Flight minutes. SOURCES='aerodatabox opensky' still runs them here.
+outside the plan's Flight minutes. SOURCES='opensky aerodatabox' still runs them here.
 
 Each run downloads a pinned commit of this repo from GitHub, runs PLAN, then runs
 `dbt build`. The commit is written
@@ -14,7 +14,7 @@ change which code runs.
 Config (Flight config, overridable per run with MD_RUN_FLIGHT(config := MAP {...})):
     WAREHOUSE  dbt / ingest target, e.g. md:aviation
     SOURCES    space-separated sources to run instead of PLAN,
-               e.g. 'opensky' or 'metar taf notam-hk notam-faa-search aerodatabox opensky'.
+               e.g. 'opensky' or 'metar taf notam-hk notam-faa-search opensky aerodatabox'.
                'none' runs dbt only.
 Secret `opensky` (TYPE flights): OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET.
 Secret `aerodatabox` (TYPE flights, optional): AERODATABOX_KEY. Without it the AeroDataBox

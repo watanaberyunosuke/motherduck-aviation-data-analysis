@@ -1,5 +1,5 @@
--- Every departure from an in-scope airport, to any destination (AeroDataBox where loaded,
--- with its schedule, else OpenSky), with the weather when it took off and, where a well-covered track exists, how long it took to
+-- Every departure from an in-scope airport, to any destination (OpenSky where it has the
+-- slot, else AeroDataBox with its schedule), with the weather when it took off and, where a well-covered track exists, how long it took to
 -- leave the departure terminal area against the airport's rolling median.
 -- Tracks are fetched for arrivals at in-scope airports (config/airports.yml), so only
 -- departures bound for another in-scope airport can have terminal metrics.

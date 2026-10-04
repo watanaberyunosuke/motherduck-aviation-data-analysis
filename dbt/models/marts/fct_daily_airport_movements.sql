@@ -1,6 +1,6 @@
--- Movements per in-scope airport per UTC day, from stg_flights: AeroDataBox's boards
--- (cancelled flights excluded) where loaded, otherwise what OpenSky's ADS-B receivers
--- saw, which undercounts where coverage is thin.
+-- Movements per in-scope airport per UTC day, from stg_flights: what OpenSky's ADS-B
+-- receivers saw, which undercounts where coverage is thin, or AeroDataBox's boards
+-- (cancelled flights excluded) where OpenSky has nothing.
 with movements as (
     select arrival_icao as icao, cast(last_seen_at as date) as day_utc, 'arrival' as direction
     from {{ ref('stg_flights') }}

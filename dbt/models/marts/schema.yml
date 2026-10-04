@@ -40,8 +40,8 @@ models:
 
   - name: fct_daily_airport_movements
     description: >
-      Arrivals and departures per airport per UTC day: AeroDataBox boards (cancellations
-      excluded) where loaded, otherwise OpenSky's observed ADS-B movements.
+      Arrivals and departures per airport per UTC day: OpenSky's observed ADS-B movements,
+      or AeroDataBox boards (cancellations excluded) where OpenSky has none.
     columns:
       - name: iata
         tests: [not_null]
@@ -89,7 +89,7 @@ models:
   - name: fct_arrivals
     description: >
       Every arrival at an in-scope airport, from any origin, with the latest METAR flight
-      category: from AeroDataBox (with schedule) where loaded, else OpenSky. Terminal
+      category: from OpenSky where it has the slot, else AeroDataBox (with schedule). Terminal
       metrics only where fct_arrival_weather_impact has the flight.
     columns:
       - name: flight_id

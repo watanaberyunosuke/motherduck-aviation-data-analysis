@@ -107,8 +107,8 @@ create table if not exists raw.aerodatabox_flights (
 );
 
 -- Which (source, airport, direction, UTC day) flight slots have been fetched, including
--- those that returned nothing. Backfills skip done slots, and staging prefers AeroDataBox
--- for any slot it has loaded.
+-- those that returned nothing. Backfills skip done slots, and staging prefers OpenSky for
+-- any slot it has loaded flights for.
 create table if not exists raw.flight_slots (
     source      varchar not null,  -- aerodatabox | opensky
     icao        varchar not null,

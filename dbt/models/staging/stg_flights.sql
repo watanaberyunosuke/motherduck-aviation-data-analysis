@@ -1,13 +1,14 @@
--- One row per flight from the preferred source for its slot. AeroDataBox (schedules plus
--- actual times) wins for every (airport, direction, UTC day) it has loaded; OpenSky
--- (ADS-B only) fills the rest. An OpenSky flight is dropped when AeroDataBox covers
--- either of its in-scope ends, because AeroDataBox then has the same flight.
+-- One row per flight from the preferred source for its slot. OpenSky (ADS-B) wins for
+-- every (airport, direction, UTC day) it has loaded flights for; AeroDataBox (schedules
+-- plus actual times) fills the rest. An AeroDataBox flight is dropped when OpenSky covers
+-- either of its in-scope ends, because OpenSky then has the same flight. A slot OpenSky
+-- loaded empty does not count as covered: that is a gap in its receivers, not a quiet day.
 -- first_seen_* / last_seen_* keep OpenSky's names: for AeroDataBox they are the
 -- departure and arrival times (runway, else revised, else scheduled).
 with covered as (
     select icao, direction, day_utc
     from {{ source('raw', 'flight_slots') }}
-    where source = 'aerodatabox'
+    where source = 'opensky' and rows > 0
 ),
 
 aerodatabox as (
@@ -33,8 +34,16 @@ aerodatabox as (
         departure_time_is_scheduled,
         arrival_time_is_scheduled,
         status
-    from {{ ref('stg_aerodatabox_flights') }}
+    from {{ ref('stg_aerodatabox_flights') }} f
     where not is_cancelled
+      and not exists (
+        select 1 from covered c
+        where c.icao = f.arrival_icao and c.direction = 'arrival'
+          and c.day_utc = cast(f.arrived_at as date))
+      and not exists (
+        select 1 from covered c
+        where c.icao = f.departure_icao and c.direction = 'departure'
+          and c.day_utc = cast(f.departed_at as date))
 ),
 
 opensky as (
@@ -61,16 +70,8 @@ opensky as (
         false                                               as arrival_time_is_scheduled,
         null::varchar                                       as status
     from {{ ref('stg_opensky_flights') }} f
-    where not exists (
-        select 1 from covered c
-        where c.icao = f.arrival_icao and c.direction = 'arrival'
-          and c.day_utc = cast(f.last_seen_at as date))
-      and not exists (
-        select 1 from covered c
-        where c.icao = f.departure_icao and c.direction = 'departure'
-          and c.day_utc = cast(f.first_seen_at as date))
 )
 
-select * from aerodatabox
-union all
 select * from opensky
+union all
+select * from aerodatabox

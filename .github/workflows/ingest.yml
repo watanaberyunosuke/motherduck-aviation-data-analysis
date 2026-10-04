@@ -10,11 +10,11 @@ name: ingest
 #
 # Flights run every hour on the hour on the GitHub runner, not in the Flight: `aviation
 # backfill flights` fetches each (airport, direction, UTC day) of the last 30 days not yet
-# loaded (AeroDataBox if its key is set, then OpenSky), newest first, plus tracks for the
-# newest day, then dbt build. Loaded days are skipped, so most runs only add tracks; a
-# new day is loaded once it is complete (06 UTC, after OpenSky's nightly batch). This
-# keeps the slowest step out of the plan's daily Flight minutes, and OpenSky has timed
-# out from the Flight's servers but not from GitHub's.
+# loaded (OpenSky, then AeroDataBox for days OpenSky missed if its key is set), newest
+# first, plus tracks for the newest day, then dbt build. Loaded days are skipped, so most
+# runs only add tracks; a new day is loaded once it is complete (06 UTC, after OpenSky's
+# nightly batch). This keeps the slowest step out of the plan's daily Flight minutes, and
+# OpenSky has timed out from the Flight's servers but not from GitHub's.
 #
 # Manual runs can pick sources, and `runner: github` runs ingest + dbt on the GitHub
 # runner instead, as a fallback if the Flight is unavailable (or the plan's daily Flight
@@ -33,7 +33,7 @@ on:
       source:
         description: "Sources to ingest (scheduled = the Flight's plan: weather + NOTAMs)"
         type: choice
-        options: [scheduled, metar, taf, notam-hk, notam-faa-search, aerodatabox, opensky, all, none,
+        options: [scheduled, metar, taf, notam-hk, notam-faa-search, opensky, aerodatabox, all, none,
                   backfill-weather, backfill-flights]
         default: scheduled
       runner:
@@ -77,7 +77,7 @@ jobs:
                 --config "STEPS=${SOURCE#backfill-}" --timeout-minutes 60
               exit ;;
             scheduled) sources="" ;;
-            all)    sources="metar taf notam-hk notam-faa-search aerodatabox opensky" ;;
+            all)    sources="metar taf notam-hk notam-faa-search opensky aerodatabox" ;;
             *)      sources="$SOURCE" ;;
           esac
           uv run python scripts/run_flight.py --sources "$sources"

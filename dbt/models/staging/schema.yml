@@ -4,7 +4,7 @@ models:
   - name: stg_flights
     description: >
       One row per flight from the preferred source for its (airport, direction, UTC day)
-      slot: AeroDataBox where it has loaded that slot, else OpenSky.
+      slot: OpenSky where it has loaded flights for that slot, else AeroDataBox.
     columns:
       - name: flight_id
         tests: [not_null, unique]

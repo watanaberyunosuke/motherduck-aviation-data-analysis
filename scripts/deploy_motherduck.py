@@ -17,8 +17,8 @@ later runs update them (each update is a new version in MotherDuck).
   both are set, otherwise it must already exist.
 - Flight secret `faa` (optional): the same from FAA_CLIENT_ID / FAA_CLIENT_SECRET. When it
   neither can be created nor exists, the Flight is published without it and skips FAA NOTAMs.
-- Flight secret `aerodatabox` (optional): from AERODATABOX_KEY. Without it the Flight skips
-  AeroDataBox and OpenSky covers all flights.
+- Flight secret `aerodatabox` (optional): from AERODATABOX_KEY, for the fallback flights
+  source. Without it the Flight skips AeroDataBox and OpenSky covers all flights.
 - Dive "Airport conditions" (dives/airport_conditions).
 """
 from __future__ import annotations
