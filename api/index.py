@@ -95,9 +95,10 @@ OPENSKY_STATES = "https://opensky-network.org/api/states/all"
 UA = {"User-Agent": "aviation-data-analysis (github.com/watanaberyunosuke/motherduck-aviation-data-analysis)"}
 OPENSKY_TOKEN_URL = ("https://auth.opensky-network.org/auth/realms/opensky-network"
                      "/protocol/openid-connect/token")
-# A 5 x 5 degree box (~550 km) around the airport. OpenSky charges 1 credit for boxes up
-# to 25 square degrees.
-LIVE_BOX_DEG = 2.5
+# Live traffic within 500 NM, so en route arrivals and departures show, not just the
+# terminal area. OpenSky gets a 16.6 x 16.6 degree box (3 credits: 100-400 square degrees).
+LIVE_RADIUS_NM = 500
+LIVE_BOX_DEG = 8.3
 LIVE_HEADERS = {
     "Cache-Control": "no-cache",
     "Vercel-CDN-Cache-Control": "max-age=120",
@@ -131,7 +132,7 @@ def _live_error(status: int, detail: str) -> JSONResponse:
                         headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"})
 
 
-ADSB_LOL = "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/150"  # ODbL, no key
+ADSB_LOL = "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{nm}"  # ODbL, no key
 
 
 def _get_json(url: str, headers: dict, timeout: float):
@@ -159,7 +160,7 @@ def _from_opensky(lat: float, lon: float) -> list[dict]:
 
 
 def _from_adsb_lol(lat: float, lon: float) -> list[dict]:
-    payload = _get_json(ADSB_LOL.format(lat=lat, lon=lon), {}, timeout=8)
+    payload = _get_json(ADSB_LOL.format(lat=lat, lon=lon, nm=LIVE_RADIUS_NM), {}, timeout=8)
     # readsb JSON: altitudes in ft ("ground" when on the ground), speeds in kt.
     return [{
         "icao24": a.get("hex"),
