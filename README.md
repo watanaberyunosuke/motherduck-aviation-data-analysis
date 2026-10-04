@@ -15,13 +15,15 @@ How much does weather and runway availability cost arriving flights at Sydney, M
 |---|---|---|---|---|
 | METAR, TAF | [Aviation Weather Center Data API](https://aviationweather.gov/data/api/) | All seven | Free, no key | Hourly |
 | NOTAMs (Hong Kong) | [HK CAD NOTAM website](https://www.notam.ais.gov.hk/), JSON at `/data` | VHHH, VHHK FIR | Free, official, no key | Every 3 h |
-| NOTAMs (US and international) | [FAA NOTAM API](https://api.faa.gov/s/) | WSSS, EHAM, PANC | Free account, client id + secret | Every 3 h |
+| NOTAMs (US and international) | [FAA NOTAM Search](https://notams.aim.faa.gov/notamSearch/nsapp.html) (the website's backend) | WSSS, EHAM, PANC | Free, no key; unofficial interface | Every 3 h |
 | NOTAMs (AU) | None at present | YSSY, YMML, YBBN | See below | Not ingested |
 | Flights, flight paths | [OpenSky Network REST API](https://openskynetwork.github.io/opensky-api/rest.html) | All seven | Free account, OAuth2 client | Daily |
 
-The FAA NOTAM API serves US NOTAMs and the international NOTAMs the FAA receives through the ICAO exchange, which is how Singapore and Amsterdam are covered. It is a copy, not the issuing authority (CAAS, LVNL), so spot-check it against the official source before relying on completeness. Without `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET` the FAA step is skipped, and those airports show no NOTAM feed rather than zero NOTAMs: the marts only treat a source as a feed once it has loaded, and only for arrivals after it first did.
+FAA NOTAM Search carries US NOTAMs and the international NOTAMs the FAA receives through the ICAO exchange, which is how Singapore and Amsterdam are covered. It is a copy, not the issuing authority (CAAS, LVNL), so spot-check it against the official source before relying on completeness. `src/aviation/sources/notam_faa_search.py` calls the search form's own JSON backend, which is not a published API. Akamai refuses plain HTTP clients there (403 even for the HTML page), so the client uses [curl_cffi](https://github.com/lexiforest/curl_cffi) to present Chrome's TLS fingerprint, loads the page for its cookies, then pages through the results 30 at a time with a pause between requests. That can stop working without notice. It drops the US DoD "V" series NOTAMs (republished foreign procedure changes) and FAA Letters to Airmen. US domestic NOTAMs (`!ANC ...`) have no Q-line, so they get no category and cannot flag a runway closure.
 
-Australia (Airservices NAIPS) publishes live NOTAMs only to registered users. Its NOTAMs should also reach the FAA API; switch the Australian airports to `notam_source: faa` once a spot-check against NAIPS shows the FAA copy is complete. A client for the paid [SkyLink NOTAM API](https://github.com/SkyLink-API/notam-api) on RapidAPI (Basic plan $18.59/month for 5,000 requests; no free tier) is kept in `src/aviation/sources/notam_rapidapi.py` but is switched off. To re-enable it, set `notam_source: rapidapi` for those airports in `config/airports.yml` and `dbt/seeds/airports.csv`, add `RAPIDAPI_KEY`, and restore the 6-hourly schedule in `ingest.yml`.
+The fallback is the official [FAA NOTAM API](https://api.faa.gov/s/) (`notam_faa.py`, `notam_source: faa`), which needs `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET` and is untested against the live API. An airport whose source has never loaded shows no NOTAM feed rather than zero NOTAMs: the marts only treat a source as a feed once it has loaded, and only for arrivals after it first did.
+
+Australia (Airservices NAIPS) publishes live NOTAMs only to registered users. Its NOTAMs should also reach the FAA; switch the Australian airports to `notam_source: faa_search` once a spot-check against NAIPS shows the FAA copy is complete. A client for the paid [SkyLink NOTAM API](https://github.com/SkyLink-API/notam-api) on RapidAPI (Basic plan $18.59/month for 5,000 requests; no free tier) is kept in `src/aviation/sources/notam_rapidapi.py` but is switched off. To re-enable it, set `notam_source: rapidapi` for those airports in `config/airports.yml` and `dbt/seeds/airports.csv`, add `RAPIDAPI_KEY`, and restore the 6-hourly schedule in `ingest.yml`.
 
 ## 2. Architecture
 
@@ -67,7 +69,7 @@ cp .env.example .env        # fill in OPENSKY_* (and FAA_* for FAA NOTAMs)
 
 make ingest-weather          # works with no credentials
 aviation ingest notam-hk     # works with no credentials
-aviation ingest notam-faa    # needs FAA NOTAM API credentials
+aviation ingest notam-faa-search   # works with no credentials
 make ingest-all              # needs OpenSky credentials
 make transform               # dbt seed + run + test
 make test                    # pytest, including a full dbt build on a temp database
@@ -76,7 +78,7 @@ make test                    # pytest, including a full dbt build on a temp data
 Credentials:
 
 - **OpenSky**: create a free account, then Account > API client. New accounts must use OAuth2 client credentials.
-- **FAA NOTAM API** (optional): register at [api.faa.gov](https://api.faa.gov/s/) and request access to the NOTAM API; it issues a client id and secret. Set `FAA_CLIENT_ID` and `FAA_CLIENT_SECRET`.
+- **FAA NOTAM API** (optional fallback, unused at present): register at [api.faa.gov](https://api.faa.gov/s/) and request access to the NOTAM API; it issues a client id and secret. Set `FAA_CLIENT_ID` and `FAA_CLIENT_SECRET`.
 - **MotherDuck** (scheduled runs only): set `WAREHOUSE=md:aviation` and `MOTHERDUCK_TOKEN`. Check MotherDuck's current free-tier limits before relying on it.
 
 ## 5. Scheduling and dashboards
@@ -91,7 +93,7 @@ A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs the pi
 | 0, 3, 6, … 21 | + Hong Kong and FAA NOTAMs |
 | 6 | + OpenSky flights and tracks for yesterday |
 
-The source is `flights/aviation_pipeline/main.py`. OpenSky credentials come from a Flight secret named `opensky`, and FAA NOTAM API credentials from an optional one named `faa`; the deploy creates both from the GitHub secrets. Without `faa` the Flight skips FAA NOTAMs. To run it now, or with other sources:
+The source is `flights/aviation_pipeline/main.py`. OpenSky credentials come from a Flight secret named `opensky`, and FAA NOTAM API credentials (for the unused `faa` fallback) from an optional one named `faa`; the deploy creates both from the GitHub secrets. To run it now, or with other sources:
 
 ```sql
 -- flight_id from: select flight_id from md_list_flights() where flight_name = 'aviation_pipeline'
@@ -100,7 +102,7 @@ select * from md_list_flight_runs(flight_id := '<id>') order by run_number desc 
 select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
 ```
 
-`SOURCES` takes space-separated sources (`metar taf notam-hk notam-faa opensky`), or `none` for dbt only.
+`SOURCES` takes space-separated sources (`metar taf notam-hk notam-faa-search opensky`), or `none` for dbt only.
 
 From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `runner: github` runs ingest and dbt on the GitHub runner instead of the Flight, as a fallback if the Flight is unavailable.
 
@@ -171,8 +173,8 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 | `Environment variable X is not set` | Copy `.env.example` to `.env`, or add the GitHub secret. Other sources still run. |
 | OpenSky `403 You cannot access historical flights` | Missing or invalid OAuth client. Check `OPENSKY_CLIENT_ID` / `SECRET`. |
 | OpenSky run logs `stopped early` | Daily credit floor reached. Lower `max_tracks_per_run` or run later; flights already landed are kept. |
-| `notam faa: skipped - FAA_CLIENT_ID / FAA_CLIENT_SECRET not set` | Expected without FAA credentials. Add them to `.env`, the GitHub secrets and (via a deploy) the Flight's `faa` secret. |
-| `SchemaMismatch` from the FAA API | Response shape changed. Inspect one raw response and update `notam_faa.rows`. |
+| `notam faa_search: FAILED - NOTAM Search returned 403` (`Blocked`) | Akamai refused the client. Try upgrading `curl_cffi` (newer Chrome fingerprints); if it keeps failing, especially from the Flight's cloud IPs, switch those airports to `notam_source: faa` with an FAA API key. |
+| `SchemaMismatch` from FAA NOTAM Search or the FAA API | Response shape changed. Inspect one raw response (`raw.notam.payload`) and update `notam_faa_search.rows` / `notam_faa.rows`. |
 | `SchemaMismatch` from RapidAPI (if re-enabled) | Provider changed its response. Inspect one raw response and update `notam_rapidapi.rows`. |
 | Days or hours look shifted | dbt forces `TimeZone: UTC` in `profiles.yml`. Ad hoc DuckDB sessions do not: run `set TimeZone='UTC'`. |
 | Deploy fails on a seed column change | Should not happen: deploy runs `dbt seed --full-refresh`. Scheduled ingest runs do not, so let a deploy finish before the next ingest. |
@@ -185,7 +187,7 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 ## 8. Next steps
 
 1. Add credentials and run a week of OpenSky ingestion to see real coverage per airport.
-2. Add FAA credentials, spot-check FAA NOTAM coverage for WSSS and EHAM against CAAS / LVNL, then try the Australian airports on the FAA source. Earlier options in [BACKLOG.md](BACKLOG.md).
+2. Spot-check FAA NOTAM Search coverage for WSSS and EHAM against CAAS / LVNL, then try the Australian airports on it. Earlier options in [BACKLOG.md](BACKLOG.md).
 3. Add the live NOTAM map (dropped with the old Vercel dashboard) to the Dive, so both the Dive and the Vercel site show it.
 4. TAF skill: compare `stg_taf` forecasts with the METARs that followed.
 5. Stretch: model excess terminal time from weather and NOTAM features.

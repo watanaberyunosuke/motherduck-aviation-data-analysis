@@ -24,9 +24,9 @@ deploy = _load("deploy_motherduck", ROOT / "scripts" / "deploy_motherduck.py")
 
 @pytest.mark.parametrize("hour, expected", [
     (1, ["metar", "taf"]),
-    (3, ["metar", "taf", "notam-hk", "notam-faa"]),
-    (0, ["metar", "taf", "notam-hk", "notam-faa"]),
-    (6, ["metar", "taf", "notam-hk", "notam-faa", "opensky"]),
+    (3, ["metar", "taf", "notam-hk", "notam-faa-search"]),
+    (0, ["metar", "taf", "notam-hk", "notam-faa-search"]),
+    (6, ["metar", "taf", "notam-hk", "notam-faa-search", "opensky"]),
     (7, ["metar", "taf"]),
 ])
 def test_hourly_plan_matches_old_ingest_schedule(hour, expected):

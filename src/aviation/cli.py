@@ -1,6 +1,6 @@
 """Command line entry point.
 
-    aviation ingest metar | taf | notam | notam-hk | notam-faa | notam-rapidapi | opensky | all
+    aviation ingest metar | taf | notam | notam-hk | notam-faa-search | notam-faa | notam-rapidapi | opensky | all
 """
 from __future__ import annotations
 
@@ -11,7 +11,9 @@ import sys
 
 from aviation import warehouse
 from aviation.config import load_settings
-from aviation.sources import aviationweather, notam_faa, notam_hk, notam_rapidapi, opensky
+from aviation.sources import (
+    aviationweather, notam_faa, notam_faa_search, notam_hk, notam_rapidapi, opensky,
+)
 
 
 def run(source: str) -> int:
@@ -33,10 +35,13 @@ def run(source: str) -> int:
     if source in ("taf", "all"):
         attempt("taf", lambda: aviationweather.ingest_taf(con, settings.icao_codes))
     hk = settings.airports_for_notam_source("hk_cad")
+    faa_search = settings.airports_for_notam_source("faa_search")
     faa = settings.airports_for_notam_source("faa")
     rapid = settings.airports_for_notam_source("rapidapi")
     if source in ("notam", "notam-hk", "all") and hk:
         attempt("notam hk_cad", lambda: notam_hk.ingest(con))
+    if source in ("notam", "notam-faa-search", "all") and faa_search:
+        attempt("notam faa_search", lambda: notam_faa_search.ingest(con, faa_search))
     if source in ("notam", "notam-faa", "all") and faa:
         # The FAA key is optional: without it those airports read as having no NOTAM feed
         # (the marts only count a source once it has loaded), so skip rather than fail.
@@ -59,8 +64,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="aviation")
     sub = parser.add_subparsers(dest="command", required=True)
     ingest = sub.add_parser("ingest", help="pull a source into the raw schema")
-    ingest.add_argument("source", choices=["metar", "taf", "notam", "notam-hk", "notam-faa",
-                                           "notam-rapidapi", "opensky", "all"])
+    ingest.add_argument("source", choices=["metar", "taf", "notam", "notam-hk", "notam-faa-search",
+                                           "notam-faa", "notam-rapidapi", "opensky", "all"])
     args = parser.parse_args(argv)
     sys.exit(run(args.source))
 

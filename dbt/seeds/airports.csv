@@ -2,7 +2,7 @@ icao,iata,name,country,lat,lon,timezone,notam_source
 YSSY,SYD,Sydney Kingsford Smith,AU,-33.946,151.177,Australia/Sydney,
 YMML,MEL,Melbourne Tullamarine,AU,-37.673,144.843,Australia/Melbourne,
 YBBN,BNE,Brisbane,AU,-27.384,153.117,Australia/Brisbane,
-WSSS,SIN,Singapore Changi,SG,1.359,103.989,Asia/Singapore,faa
+WSSS,SIN,Singapore Changi,SG,1.359,103.989,Asia/Singapore,faa_search
 VHHH,HKG,Hong Kong International,HK,22.309,113.915,Asia/Hong_Kong,hk_cad
-EHAM,AMS,Amsterdam Schiphol,NL,52.309,4.764,Europe/Amsterdam,faa
-PANC,ANC,Anchorage Ted Stevens,US,61.179,-149.993,America/Anchorage,faa
+EHAM,AMS,Amsterdam Schiphol,NL,52.309,4.764,Europe/Amsterdam,faa_search
+PANC,ANC,Anchorage Ted Stevens,US,61.179,-149.993,America/Anchorage,faa_search

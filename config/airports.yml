@@ -1,12 +1,15 @@
 # Airports in scope. `notam_source` decides which NOTAM client serves each airport:
 #   hk_cad   -> Hong Kong CAD public feed (free, official, no key)
+#   faa_search -> FAA NOTAM Search website (free, no key; the site's own backend, see
+#               notam_faa_search.py). US NOTAMs plus international NOTAMs the FAA receives
+#               through the ICAO exchange.
 #   faa      -> FAA NOTAM API (free, needs FAA_CLIENT_ID / FAA_CLIENT_SECRET from api.faa.gov).
-#               Serves US NOTAMs and international NOTAMs received through the ICAO exchange.
+#               Same data through the official API; the fallback if faa_search stops working.
 #   rapidapi -> SkyLink NOTAM API on RapidAPI (paid; no free tier. Basic: $18.59/mo, 5,000 requests)
 #   null     -> no NOTAM feed. NOTAM flags in the marts are null (unknown) for these airports.
 # Australia has no free official NOTAM feed, so it is null for now. Its NOTAMs should also
-# reach the FAA API; switch them to faa once a spot-check against Airservices NAIPS shows
-# the FAA copy is complete. Keep `notam_source` in dbt/seeds/airports.csv in step.
+# reach the FAA; switch them to faa_search once a spot-check against Airservices NAIPS
+# shows the FAA copy is complete. Keep `notam_source` in dbt/seeds/airports.csv in step.
 # Coordinates live in dbt/seeds/airports.csv so SQL models can use them.
 airports:
   - icao: YSSY
@@ -20,16 +23,16 @@ airports:
     notam_source: null
   - icao: WSSS
     name: Singapore Changi
-    notam_source: faa
+    notam_source: faa_search
   - icao: VHHH
     name: Hong Kong International
     notam_source: hk_cad
   - icao: EHAM
     name: Amsterdam Schiphol
-    notam_source: faa
+    notam_source: faa_search
   - icao: PANC
     name: Anchorage Ted Stevens
-    notam_source: faa
+    notam_source: faa_search
 
 opensky:
   # Flights endpoints are batch-processed overnight by OpenSky, so pull whole UTC days

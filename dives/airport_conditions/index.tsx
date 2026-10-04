@@ -428,7 +428,7 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
 
 // ---- NOTAMs: full text of every NOTAM in force, filterable by Q-code category ----------
 const NOTAM_SOURCES: Record<string, string> = {
-  hk_cad: "Hong Kong CAD", faa: "FAA NOTAM API", rapidapi: "SkyLink on RapidAPI",
+  hk_cad: "Hong Kong CAD", faa_search: "FAA NOTAM Search", faa: "FAA NOTAM API", rapidapi: "SkyLink on RapidAPI",
 };
 // "movement_area" -> "Movement area"
 const humanize = (v: string) => (v.charAt(0).toUpperCase() + v.slice(1)).replace(/_/g, " ");
