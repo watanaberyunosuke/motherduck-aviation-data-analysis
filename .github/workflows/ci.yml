@@ -135,7 +135,16 @@ jobs:
 
       # Smoke test the published Flight: one METAR ingest then dbt build, in the Flight
       # runtime. Catches failures that only show up there (e.g. ingest and dbt sharing a
-      # process) on the push that causes them, not at the next hourly run.
+      # process) on the push that causes them, not at the next hourly run. Skipped with a
+      # warning if the plan's daily Flight minutes are spent (exit 75): the Flight is
+      # already published, and the next scheduled run tests it.
       - name: Run Flight once
         if: steps.changes.outputs.flight == 'true'
-        run: uv run python scripts/run_flight.py --sources metar
+        run: |
+          status=0
+          uv run python scripts/run_flight.py --sources metar || status=$?
+          if [ "$status" = 75 ]; then
+            echo "::warning::Flight smoke test skipped: today's Flight minutes are spent (reset at 00:00 UTC)"
+            exit 0
+          fi
+          exit $status
