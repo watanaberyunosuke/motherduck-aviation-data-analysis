@@ -328,18 +328,6 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
   }
   const pxPerKm = (TILE * n) / (40075.017 * Math.cos((lat * Math.PI) / 180));
   const catColor = wx?.flight_category ? CATEGORY_COLORS[wx.flight_category] : MUTED;
-  const windFrom = wx && !wx.wind_variable && wx.wind_dir_deg != null && N(wx.wind_speed_kt) > 0
-    ? (N(wx.wind_dir_deg) * Math.PI) / 180 : null;
-  // The wind arrow starts on the upwind side and points at the airport, the way the air
-  // moves. It grows with speed (capped at 40 kt) so a strong wind reads as one.
-  const windArrow = windFrom == null ? null : (() => {
-    const ux = Math.sin(windFrom), uy = -Math.cos(windFrom);
-    const tail = 16 + 40 + Math.min(N(wx!.wind_speed_kt), 40) * 3;
-    const at = (d: number) => [MAP_W / 2 + d * ux, MAP_H / 2 + d * uy];
-    const [x1, y1] = at(tail), [x2, y2] = at(16), [lx, ly] = at(tail + 10);
-    const anchor: "start" | "end" | "middle" = ux > 0.3 ? "start" : ux < -0.3 ? "end" : "middle";
-    return { x1, y1, x2, y2, lx, ly, anchor, dy: uy > 0.3 ? 10 : uy < -0.3 ? -2 : 4 };
-  })();
   const btn: CSSProperties = {
     width: 28, height: 28, border: `1px solid ${RULE}`, background: "#fff", borderRadius: 6,
     fontSize: 16, lineHeight: "24px", cursor: "pointer", color: INK,
@@ -348,11 +336,6 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
   return (
     <div style={{ position: "relative", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
       <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} style={{ width: "100%", height: "auto", display: "block", background: "#eef1f4" }}>
-        <defs>
-          <marker id="wind-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-            <path d="M0,0 L10,5 L0,10 z" fill={INK} />
-          </marker>
-        </defs>
         {/* Half a pixel of overlap hides anti-aliasing seams between tiles. */}
         {tiles.map((t) => <image key={t.key} href={t.href} x={t.x} y={t.y} width={TILE + 0.5} height={TILE + 0.5} />)}
         <circle cx={MAP_W / 2} cy={MAP_H / 2} r={TERMINAL_KM * pxPerKm} fill="none" stroke={INK} strokeOpacity={0.35} strokeDasharray="6 5" />
@@ -389,20 +372,6 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
             </g>
           );
         })}
-        {windArrow && (
-          <g>
-            <title>{`Wind from ${windText(wx!)}, blowing toward the airport`}</title>
-            {/* A white casing keeps the arrow readable over tracks and traffic. */}
-            <line x1={windArrow.x1} y1={windArrow.y1} x2={windArrow.x2} y2={windArrow.y2}
-              stroke="#fff" strokeWidth={6} strokeLinecap="round" />
-            <line x1={windArrow.x1} y1={windArrow.y1} x2={windArrow.x2} y2={windArrow.y2}
-              stroke={INK} strokeWidth={3} markerEnd="url(#wind-head)" />
-            <text x={windArrow.lx} y={windArrow.ly} dy={windArrow.dy} textAnchor={windArrow.anchor}
-              fontSize={13} fontWeight={600} fill={INK} stroke="#fff" strokeWidth={3.5} paintOrder="stroke">
-              {`Wind ${windText(wx!)}`}
-            </text>
-          </g>
-        )}
         <circle cx={MAP_W / 2} cy={MAP_H / 2} r={9} fill={catColor} stroke="#fff" strokeWidth={2.5}>
           <title>{`${wx?.flight_category ?? "No current category"} · ${wx ? windText(wx) : ""}`}</title>
         </circle>
@@ -978,7 +947,7 @@ export default function AirportConditions() {
 
       <Section
         title="Airspace"
-        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The black arrow is the surface wind, drawn from the upwind side toward the airport and longer for stronger wind; the panel shows the latest METAR. Zoom out to see en route traffic."
+        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Zoom out to see en route traffic."
       >
         {!wx ? <Skeleton h={400} /> : (
           <AirspaceMap
