@@ -138,8 +138,8 @@ type Live = { icao24: string; callsign: string | null; lat: number; lon: number;
 
 // Live positions around the airport, refreshed every 2 minutes.
 function useLiveAircraft(icao: string) {
-  const [state, setState] = useState<{ aircraft: Live[]; at: Date | null; error: string | null }>(
-    { aircraft: [], at: null, error: null });
+  const [state, setState] = useState<{ aircraft: Live[]; source: string; at: Date | null; error: string | null }>(
+    { aircraft: [], source: "", at: null, error: null });
   useEffect(() => {
     if (!icao) return;
     let stale = false;
@@ -149,9 +149,9 @@ function useLiveAircraft(icao: string) {
         if (!r.ok) throw new Error(body?.detail ?? `HTTP ${r.status}`);
         return body;
       })
-      .then((b) => !stale && setState({ aircraft: b.aircraft ?? [], at: new Date(), error: null }))
+      .then((b) => !stale && setState({ aircraft: b.aircraft ?? [], source: b.source ?? "", at: new Date(), error: null }))
       .catch((e) => !stale && setState((s) => ({ ...s, error: String(e?.message ?? e) })));
-    setState({ aircraft: [], at: null, error: null });
+    setState({ aircraft: [], source: "", at: null, error: null });
     load();
     const id = setInterval(load, LIVE_REFRESH_MS);
     return () => { stale = true; clearInterval(id); };
@@ -650,7 +650,7 @@ export default function AirportConditions() {
           {live.error
             ? `Live positions unavailable: ${live.error}.`
             : live.at
-              ? `${live.aircraft.length} live aircraft from OpenSky, updated ${clockParts(live.at, tz).time} ${iata} time. Hover an aircraft for its flight, altitude and speed.`
+              ? `${live.aircraft.length} live aircraft from ${live.source || "ADS-B"}, updated ${clockParts(live.at, tz).time} ${iata} time. Hover an aircraft for its flight, altitude and speed.`
               : "Loading live positions…"}
           {" "}{tracks.length} tracked paths. Official SID/STAR charts are not shown; no free procedure data covers these airports.
         </p>

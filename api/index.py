@@ -6,9 +6,10 @@ server-side: it exports each allow-listed table as Parquet, and Vercel's edge (n
 browser) caches the file for 10 minutes. The pipeline lands new data hourly, so that is
 fresh enough.
 
-It also proxies live aircraft positions around each airport from OpenSky (/api/live),
-because OpenSky does not allow browser requests from other sites. Each airport's answer
-is cached at the edge for 2 minutes, so all viewers share one OpenSky call.
+It also proxies live aircraft positions around each airport (/api/live), because the
+ADS-B sources do not allow browser requests from other sites. OpenSky is tried first;
+if it fails (it times out from Vercel's servers), adsb.lol answers instead. Each
+airport's answer is cached at the edge for 2 minutes, so all viewers share one call.
 
 Self-contained on purpose: no import of the `aviation` package. Reads only, never writes.
 """
@@ -91,6 +92,7 @@ def table(name: str) -> Response:
 # --- Live positions -----------------------------------------------------------------
 
 OPENSKY_STATES = "https://opensky-network.org/api/states/all"
+UA = {"User-Agent": "aviation-data-analysis (github.com/watanaberyunosuke/motherduck-aviation-data-analysis)"}
 OPENSKY_TOKEN_URL = ("https://auth.opensky-network.org/auth/realms/opensky-network"
                      "/protocol/openid-connect/token")
 # A 5 x 5 degree box (~550 km) around the airport. OpenSky charges 1 credit for boxes up
@@ -116,7 +118,8 @@ def _opensky_auth() -> dict:
     if _token is None or time.time() > _token[1] - 60:
         body = urllib.parse.urlencode({"grant_type": "client_credentials",
                                        "client_id": cid, "client_secret": secret}).encode()
-        with urllib.request.urlopen(OPENSKY_TOKEN_URL, data=body, timeout=10) as r:
+        req = urllib.request.Request(OPENSKY_TOKEN_URL, data=body, headers=UA)
+        with urllib.request.urlopen(req, timeout=8) as r:
             tok = json.load(r)
         _token = (tok["access_token"], time.time() + int(tok.get("expires_in", 1800)))
     return {"Authorization": f"Bearer {_token[0]}"}
@@ -126,6 +129,55 @@ def _live_error(status: int, detail: str) -> JSONResponse:
     # Errors are not edge-cached, so the next viewer retries.
     return JSONResponse({"detail": detail}, status_code=status,
                         headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-store"})
+
+
+ADSB_LOL = "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/150"  # ODbL, no key
+
+
+def _get_json(url: str, headers: dict, timeout: float):
+    with urllib.request.urlopen(urllib.request.Request(url, headers={**UA, **headers}),
+                                timeout=timeout) as r:
+        return json.load(r)
+
+
+def _from_opensky(lat: float, lon: float) -> list[dict]:
+    query = urllib.parse.urlencode({"lamin": lat - LIVE_BOX_DEG, "lamax": lat + LIVE_BOX_DEG,
+                                    "lomin": lon - LIVE_BOX_DEG, "lomax": lon + LIVE_BOX_DEG})
+    payload = _get_json(f"{OPENSKY_STATES}?{query}", _opensky_auth(), timeout=8)
+    # State vector fields: https://openskynetwork.github.io/opensky-api/rest.html
+    return [{
+        "icao24": s[0],
+        "callsign": (s[1] or "").strip() or None,
+        "lon": s[5],
+        "lat": s[6],
+        "alt_ft": round((s[7] if s[7] is not None else s[13] or 0) * 3.28084),
+        "on_ground": bool(s[8]),
+        "speed_kt": None if s[9] is None else round(s[9] * 1.94384),
+        "track_deg": s[10],
+        "vrate_fpm": None if s[11] is None else round(s[11] * 196.85),
+    } for s in payload.get("states") or [] if s[5] is not None and s[6] is not None]
+
+
+def _from_adsb_lol(lat: float, lon: float) -> list[dict]:
+    payload = _get_json(ADSB_LOL.format(lat=lat, lon=lon), {}, timeout=8)
+    # readsb JSON: altitudes in ft ("ground" when on the ground), speeds in kt.
+    return [{
+        "icao24": a.get("hex"),
+        "callsign": (a.get("flight") or "").strip() or None,
+        "lon": a["lon"],
+        "lat": a["lat"],
+        "alt_ft": a["alt_baro"] if isinstance(a.get("alt_baro"), (int, float)) else 0,
+        "on_ground": a.get("alt_baro") == "ground",
+        "speed_kt": None if a.get("gs") is None else round(a["gs"]),
+        "track_deg": a.get("track", a.get("true_heading")),
+        "vrate_fpm": a.get("baro_rate", a.get("geom_rate")),
+    } for a in payload.get("ac") or [] if a.get("lat") is not None and a.get("lon") is not None]
+
+
+def _why(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return "quota used up" if exc.code == 429 else f"HTTP {exc.code}"
+    return f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
 
 
 @app.get("/api/live/{icao}")
@@ -139,29 +191,15 @@ def live(icao: str) -> JSONResponse:
     if row is None:
         return _live_error(404, f"unknown airport {icao!r}")
     lat, lon = row
-    query = urllib.parse.urlencode({"lamin": lat - LIVE_BOX_DEG, "lamax": lat + LIVE_BOX_DEG,
-                                    "lomin": lon - LIVE_BOX_DEG, "lomax": lon + LIVE_BOX_DEG})
-    try:
-        req = urllib.request.Request(f"{OPENSKY_STATES}?{query}", headers=_opensky_auth())
-        with urllib.request.urlopen(req, timeout=15) as r:
-            payload = json.load(r)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            return _live_error(503, "OpenSky's daily quota for live positions is used up")
-        return _live_error(502, f"OpenSky returned HTTP {exc.code}")
-    except (urllib.error.URLError, TimeoutError) as exc:
-        return _live_error(502, f"OpenSky unreachable: {exc}")
 
-    # State vector fields: https://openskynetwork.github.io/opensky-api/rest.html
-    aircraft = [{
-        "icao24": s[0],
-        "callsign": (s[1] or "").strip() or None,
-        "lon": s[5],
-        "lat": s[6],
-        "alt_ft": round((s[7] if s[7] is not None else s[13] or 0) * 3.28084),
-        "on_ground": bool(s[8]),
-        "speed_kt": None if s[9] is None else round(s[9] * 1.94384),
-        "track_deg": s[10],
-        "vrate_fpm": None if s[11] is None else round(s[11] * 196.85),
-    } for s in payload.get("states") or [] if s[5] is not None and s[6] is not None]
-    return JSONResponse({"time": payload.get("time"), "aircraft": aircraft}, headers=LIVE_HEADERS)
+    failures = []
+    for source, fetch in (("OpenSky", _from_opensky), ("adsb.lol", _from_adsb_lol)):
+        try:
+            aircraft = fetch(lat, lon)
+        except Exception as exc:  # network, HTTP or payload errors: try the next source
+            failures.append(f"{source}: {_why(exc)}")
+            print(f"live {icao}: {failures[-1]}")
+            continue
+        return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
+                             "failed": failures}, headers=LIVE_HEADERS)
+    return _live_error(502, "; ".join(failures))
