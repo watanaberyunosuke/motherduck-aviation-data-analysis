@@ -24,9 +24,9 @@ deploy = _load("deploy_motherduck", ROOT / "scripts" / "deploy_motherduck.py")
 
 @pytest.mark.parametrize("hour, expected", [
     (1, ["metar", "taf"]),
-    (3, ["metar", "taf", "notam-hk"]),
-    (0, ["metar", "taf", "notam-hk"]),
-    (6, ["metar", "taf", "notam-hk", "opensky"]),
+    (3, ["metar", "taf", "notam-hk", "notam-faa-search"]),
+    (0, ["metar", "taf", "notam-hk", "notam-faa-search"]),
+    (6, ["metar", "taf", "notam-hk", "notam-faa-search", "opensky"]),
     (7, ["metar", "taf"]),
 ])
 def test_hourly_plan_matches_old_ingest_schedule(hour, expected):
@@ -77,13 +77,16 @@ def test_flight_placeholders_present():
 class _FakeMotherDuck:
     """Records SQL and answers the Flight functions from canned rows."""
 
-    def __init__(self, flight_ids=("abc",), statuses=()):
+    def __init__(self, flight_ids=("abc",), statuses=(), secrets=("opensky", "faa")):
         self.flight_ids = list(flight_ids)
+        self.secrets = set(secrets)  # secrets that already exist in MotherDuck
         self.statuses = list(statuses)  # successive md_list_flight_runs answers
         self.calls: list[str] = []
 
     def execute(self, sql, params=None):
         self.calls.append(sql)
+        if "duckdb_secrets" in sql:
+            return _Rows([(int(params[0] in self.secrets),)])
         if "md_list_flights" in sql:
             return _Rows([(i,) for i in self.flight_ids])
         if "md_run_flight" in sql:
@@ -116,6 +119,31 @@ def test_flight_is_published_unscheduled(monkeypatch, existing, verb):
     published = [c for c in con.calls if verb in c]
     assert len(published) == 1
     assert "schedule_cron" not in published[0]
+
+
+def test_faa_secret_is_optional(monkeypatch):
+    monkeypatch.setenv("OPENSKY_CLIENT_ID", "id")
+    monkeypatch.setenv("OPENSKY_CLIENT_SECRET", "secret")
+    monkeypatch.delenv("FAA_CLIENT_ID", raising=False)
+    monkeypatch.delenv("FAA_CLIENT_SECRET", raising=False)
+    con = _FakeMotherDuck(secrets=())
+    deploy.deploy_flight(con, "0" * 40)
+    (published,) = [c for c in con.calls if "md_update_flight" in c]
+    assert "flight_secret_names := ['opensky']" in published
+
+    monkeypatch.setenv("FAA_CLIENT_ID", "fid")
+    monkeypatch.setenv("FAA_CLIENT_SECRET", "fsecret")
+    con = _FakeMotherDuck(secrets=())
+    deploy.deploy_flight(con, "0" * 40)
+    (published,) = [c for c in con.calls if "md_update_flight" in c]
+    assert "flight_secret_names := ['opensky', 'faa']" in published
+
+
+def test_opensky_secret_is_required(monkeypatch):
+    for k in ("OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(SystemExit):
+        deploy.deploy_flight(_FakeMotherDuck(secrets=()), "0" * 40)
 
 
 sys.path.insert(0, str(ROOT / "scripts"))

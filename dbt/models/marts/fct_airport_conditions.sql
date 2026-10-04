@@ -18,6 +18,12 @@ notams as (
     from {{ ref('fct_notams') }}
     where is_current
     group by 1
+),
+
+-- Sources that have loaded at least once. An airport whose source never has (an FAA key
+-- not yet set, say) has no feed in practice.
+notam_feeds as (
+    select distinct source from {{ ref('stg_notam') }}
 )
 
 select
@@ -46,8 +52,9 @@ select
     t.valid_to                    as taf_valid_to,
     t.raw_text                    as taf_raw,
     -- Null, not 0, where the airport has no NOTAM feed.
-    case when a.notam_source is not null then coalesce(n.n, 0) end as notams_in_force
+    case when f.source is not null then coalesce(n.n, 0) end as notams_in_force
 from {{ ref('airports') }} a
 left join latest_metar m on m.icao = a.icao
 left join latest_taf t on t.icao = a.icao
 left join notams n on n.location = a.icao
+left join notam_feeds f on f.source = a.notam_source

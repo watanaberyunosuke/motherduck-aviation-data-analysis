@@ -20,7 +20,8 @@ from datetime import datetime, timezone
 
 _HEADER = re.compile(r"\(?\s*(?P<number>[A-Z]\d{4}/\d{2})\s+NOTAM(?P<type>[NRC])(?:\s+(?P<replaces>[A-Z]\d{4}/\d{2}))?")
 _Q = re.compile(
-    r"Q\)\s*(?P<fir>[A-Z]{4})/(?P<code>Q[A-Z]{4})/(?P<traffic>[A-Z ]*)/(?P<purpose>[A-Z ]*)/"
+    # The FAA writes some US FIRs with 3 letters (ZAN for Anchorage).
+    r"Q\)\s*(?P<fir>[A-Z]{3,4})/(?P<code>Q[A-Z]{4})/(?P<traffic>[A-Z ]*)/(?P<purpose>[A-Z ]*)/"
     r"(?P<scope>[A-Z ]*)/(?P<lower>\d{3})/(?P<upper>\d{3})/"
     r"(?P<lat>\d{4}[NS])(?P<lon>\d{5}[EW])(?P<radius>\d{3})"
 )

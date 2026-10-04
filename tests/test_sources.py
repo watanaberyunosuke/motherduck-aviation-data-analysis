@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 
 from aviation import warehouse
-from aviation.sources import aviationweather, notam_hk, notam_rapidapi, opensky
+from aviation.sources import (
+    aviationweather, notam_faa, notam_faa_search, notam_hk, notam_rapidapi, opensky,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -69,6 +71,134 @@ def test_rapidapi_uses_structured_fields_and_fills_q_code_when_icao():
 def test_rapidapi_schema_change_fails_loudly():
     with pytest.raises(notam_rapidapi.SchemaMismatch):
         notam_rapidapi.rows("YSSY", {"data": []})
+
+
+# Shape from the FAA NOTAM API docs (GeoJSON format, trimmed). One international NOTAM with
+# an ICAO translation, one US domestic NOTAM with only the local-format text.
+def _faa_item(notam: dict, translations: list[dict]) -> dict:
+    return {"type": "Feature", "geometry": None,
+            "properties": {"coreNOTAMData": {"notam": notam, "notamTranslation": translations}}}
+
+
+FAA_ITEMS = [
+    _faa_item(
+        {"id": "NOTAM_1", "number": "A1234/26", "type": "N", "selectionCode": "QMRLC",
+         "icaoLocation": "EHAM", "effectiveStart": "2026-10-01T22:00:00.000Z",
+         "effectiveEnd": "2026-10-02T05:00:00.000Z", "text": "RWY 18R/36L CLSD",
+         "classification": "INTL"},
+        [{"type": "ICAO", "formattedText":
+          "A1234/26 NOTAMN\nQ) EHAA/QMRLC/IV/NBO/A/000/999/5219N00446E005\n"
+          "A) EHAM B) 2610012200 C) 2610020500 EST\nE) RWY 18R/36L CLSD"}]),
+    _faa_item(
+        {"id": "NOTAM_2", "number": "10/045", "type": "N", "icaoLocation": "PANC",
+         "effectiveStart": "2026-10-01T00:00:00.000Z", "effectiveEnd": "PERM",
+         "text": "OBST CRANE 610218N1495937W 210FT AGL", "classification": "DOM"},
+        [{"type": "LOCAL_FORMAT", "simpleText": "!ANC 10/045 ANC OBST CRANE"}]),
+]
+
+
+def test_faa_parses_icao_translation_and_falls_back_to_structured_fields():
+    now = warehouse.utcnow()
+    intl, dom = notam_faa.rows("EHAM", FAA_ITEMS, now)
+    assert intl["notam_key"] == "EHAM:A1234/26" and intl["fir"] == "EHAA"
+    assert intl["q_code"] == "QMRLC" and intl["is_estimated"] is True
+    assert intl["ends_at"].isoformat() == "2026-10-02T05:00:00+00:00"
+    assert intl["raw_text"].startswith("A1234/26 NOTAMN")
+    assert dom["notam_key"] == "PANC:10/045" and dom["location"] == "PANC"
+    assert dom["q_code"] is None and dom["is_permanent"] is True and dom["ends_at"] is None
+    assert dom["starts_at"].isoformat() == "2026-10-01T00:00:00+00:00"
+    assert dom["raw_text"] == dom["body"] == "OBST CRANE 610218N1495937W 210FT AGL"
+    assert intl["last_seen_at"] == dom["last_seen_at"] == now
+
+
+def test_faa_rows_load_into_raw_notam(con):
+    rows = notam_faa.rows("EHAM", FAA_ITEMS, warehouse.utcnow())
+    warehouse.upsert(con, "raw.notam", rows, ["source", "notam_key"], keep_on_conflict=("first_seen_at",))
+    assert con.execute("select count(*) from raw.notam where source = 'faa'").fetchone()[0] == 2
+
+
+def test_faa_schema_change_fails_loudly():
+    with pytest.raises(notam_faa.SchemaMismatch):
+        notam_faa.rows("EHAM", [{"properties": {}}], warehouse.utcnow())
+
+
+# Real records from the FAA NOTAM Search backend, one of each kind (see the fixture's _note).
+FAA_SEARCH = json.loads((FIXTURES / "faa_notam_search.json").read_text())
+
+
+def test_faa_search_drops_military_and_letters_to_airmen():
+    rows = notam_faa_search.rows("EHAM", FAA_SEARCH["notamList"], warehouse.utcnow())
+    keys = [r["notam_key"] for r in rows]
+    assert keys == ["EHAM:A1954/26", "EHAM:A1731/26", "PANC:10/028", "PANC:5/2149", "PANC:09/183"]
+
+
+def test_faa_search_parses_icao_text_and_falls_back_for_domestic():
+    by_key = {r["notam_key"]: r for r in
+              notam_faa_search.rows("EHAM", FAA_SEARCH["notamList"], warehouse.utcnow())}
+    sched = by_key["EHAM:A1954/26"]
+    assert sched["q_code"] == "QPOCH" and sched["fir"] == "EHAA" and sched["schedule"] == "MON-FRI 0500-1500"
+    assert by_key["EHAM:A1731/26"]["is_estimated"] is True
+    assert by_key["EHAM:A1731/26"]["replaces"] == "A1495/26"
+    # FAA rendering of a US NOTAM: domestic number, 3-letter FIR.
+    assert by_key["PANC:10/028"]["fir"] == "ZAN" and by_key["PANC:10/028"]["q_code"] == "QMXXX"
+    assert by_key["PANC:5/2149"]["q_code"] == "QPDCH"
+    # US domestic format: no Q-line, dates from the record's own fields.
+    dom = by_key["PANC:09/183"]
+    assert dom["q_code"] is None and dom["raw_text"].startswith("!ANC 09/183")
+    assert dom["starts_at"].isoformat() == "2026-09-20T07:45:00+00:00"
+    assert dom["ends_at"].isoformat() == "2026-10-20T07:45:00+00:00"
+
+
+def test_faa_search_cleans_html_entities():
+    assert notam_faa_search._clean(" 1500M&#8203; 369\u200b ") == "1500M 369"
+    assert notam_faa_search._date("12/31/2026 2300EST").isoformat() == "2026-12-31T23:00:00+00:00"
+    assert notam_faa_search._date("PERM") is None
+
+
+class _FakeSearchSession:
+    """Answers the search POST page by page, like the site (30 per page there)."""
+
+    def __init__(self, records, page_size=3, content_type="application/json;charset=UTF-8"):
+        self.records, self.page_size, self.content_type = records, page_size, content_type
+        self.offsets = []
+
+    def post(self, url, timeout, headers, data):
+        offset = int(data["offset"])
+        self.offsets.append(offset)
+        page = self.records[offset:offset + self.page_size]
+        body = {"notamList": page, "totalNotamCount": len(self.records), "error": ""}
+        return _FakeSearchResponse(body, self.content_type)
+
+
+class _FakeSearchResponse:
+    def __init__(self, body, content_type):
+        self.status_code, self._body = 200, body
+        self.headers = {"content-type": content_type}
+
+    def json(self):
+        return self._body
+
+    def raise_for_status(self):
+        pass
+
+
+def test_faa_search_fetches_every_page(monkeypatch):
+    monkeypatch.setattr(notam_faa_search, "PAUSE_SECONDS", 0)
+    session = _FakeSearchSession(FAA_SEARCH["notamList"])
+    items = notam_faa_search.fetch(session, "EHAM")
+    assert len(items) == len(FAA_SEARCH["notamList"]) and session.offsets == [0, 3, 6]
+
+
+def test_faa_search_reports_akamai_block(monkeypatch):
+    session = _FakeSearchSession([], content_type="text/html")
+    with pytest.raises(notam_faa_search.Blocked):
+        notam_faa_search.fetch(session, "EHAM")
+
+
+def test_faa_search_rows_load_into_raw_notam(con):
+    rows = notam_faa_search.rows("EHAM", FAA_SEARCH["notamList"], warehouse.utcnow())
+    warehouse.upsert(con, "raw.notam", rows, ["source", "notam_key"], keep_on_conflict=("first_seen_at",))
+    assert con.execute("select count(*) from raw.notam where source = 'faa_search'").fetchone()[0] == 5
 
 
 def test_opensky_day_window_is_a_whole_utc_day():

@@ -426,6 +426,55 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
   );
 }
 
+// ---- NOTAMs: full text of every NOTAM in force, filterable by Q-code category ----------
+const NOTAM_SOURCES: Record<string, string> = {
+  hk_cad: "Hong Kong CAD", faa_search: "FAA NOTAM Search", faa: "FAA NOTAM API", rapidapi: "SkyLink on RapidAPI",
+};
+// "movement_area" -> "Movement area"
+const humanize = (v: string) => (v.charAt(0).toUpperCase() + v.slice(1)).replace(/_/g, " ");
+
+function NotamList({ rows }: { rows: Record<string, any>[] }) {
+  const [category, setCategory] = useState("all");
+  const catOf = (r: Record<string, any>) => (r.category as string | null) ?? "uncategorised";
+  const counts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) m.set(catOf(r), (m.get(catOf(r)) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [rows]);
+  const shown = category === "all" ? rows : rows.filter((r) => catOf(r) === category);
+  return (
+    <>
+      <select
+        value={category}
+        onChange={(e) => setCategory(e.target.value)}
+        style={{ fontSize: 13, padding: "3px 6px", border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 8 }}
+      >
+        <option value="all">All categories ({rows.length})</option>
+        {counts.map(([c, n]) => <option key={c} value={c}>{humanize(c)} ({n})</option>)}
+      </select>
+      <div style={{ maxHeight: 560, overflowY: "auto", borderTop: `1px solid ${RULE}` }}>
+        {shown.map((r) => (
+          <div key={r.notam_key} style={{ padding: "10px 0", borderBottom: `1px solid ${RULE}` }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "2px 12px", fontSize: 13 }}>
+              <span style={{ fontWeight: 600 }}>{r.number}</span>
+              {r.category && (
+                <span style={{ color: MUTED }}>
+                  {humanize(r.category)}{r.condition ? ` · ${humanize(r.condition)}` : ""}
+                </span>
+              )}
+              <span style={{ color: MUTED }}>
+                {r.from_txt ?? "?"} to {r.is_permanent ? "PERM" : r.to_txt ?? "?"}{r.is_estimated ? " (estimated)" : ""}
+              </span>
+              {r.has_schedule && <span style={{ color: ORANGE }}>Active only: {r.schedule}</span>}
+            </div>
+            <pre style={mono}>{r.raw_text}</pre>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 const th: CSSProperties = {
   textAlign: "left", fontWeight: 500, color: MUTED, padding: "6px 12px 6px 0", borderBottom: `1px solid ${RULE}`,
 };
@@ -435,7 +484,7 @@ const num: CSSProperties = { ...td, textAlign: "right", fontVariantNumeric: "tab
 export default function AirportConditions() {
   // Airports, busiest first.
   const airportsQ = useSQLQuery(`
-    select a.icao, a.iata, a.name, a.timezone, count(f.icao24) as arrivals
+    select a.icao, a.iata, a.name, a.timezone, a.notam_source, count(f.icao24) as arrivals
     from "aviation"."reference"."airports" a
     left join "aviation"."marts"."fct_arrivals" f
       on f.arrival_icao = a.icao and f.arrived_at >= now() - interval 30 day
@@ -492,6 +541,20 @@ export default function AirportConditions() {
       strftime(taf_valid_to at time zone 'UTC', '%d %H:%MZ')        as taf_to
     from "aviation"."marts"."fct_airport_conditions"
     where icao = '${icao}'
+  `, ready);
+
+  // Every NOTAM for this aerodrome in the latest feed whose validity covers now: the same
+  // rows fct_airport_conditions.notams_in_force counts.
+  const notamsQ = useSQLQuery(`
+    select
+      notam_key, number, category, condition, has_schedule, schedule, is_permanent, is_estimated,
+      raw_text,
+      strftime(starts_at at time zone 'UTC', '%d %b %Y %H:%MZ') as from_txt,
+      strftime(ends_at at time zone 'UTC', '%d %b %Y %H:%MZ')   as to_txt
+    from "aviation"."marts"."fct_notams"
+    where location = '${icao}'
+      and is_current
+    order by starts_at desc, number
   `, ready);
 
   // Arrival and departure ends of tracked flights, for the map.
@@ -768,6 +831,8 @@ export default function AirportConditions() {
     [movementsQ.data],
   );
   const name = airport?.name;
+  const notams = rowsOf(notamsQ.data);
+  const notamSource = NOTAM_SOURCES[airport?.notam_source as string] ?? null;
   const arrivals = rowsOf(arrivalsQ.data);
   const departures = rowsOf(departuresQ.data);
 
@@ -889,6 +954,25 @@ export default function AirportConditions() {
             </div>
             <pre style={mono}>{wx.taf_raw ?? "No TAF for this airport yet."}</pre>
           </>
+        )}
+      </Section>
+
+      <Section
+        title="NOTAMs in force"
+        note={`Full text of every NOTAM for ${icao} that is in force now, newest first${notamSource ? `, from the ${notamSource}` : ""}. Times are UTC; refreshed every 3 hours. A NOTAM with a schedule (D) item) is active only in the listed windows. For analysis, not flight planning.`}
+      >
+        {notamsQ.isLoading || conditionsQ.isLoading ? <Skeleton h={160} /> : notamsQ.isError ? (
+          <Empty>Could not load NOTAMs: {String(notamsQ.error?.message ?? notamsQ.error)}</Empty>
+        ) : wx?.notams_in_force == null ? (
+          <Empty>
+            {notamSource
+              ? `No NOTAMs loaded for ${iata} yet from the ${notamSource}.`
+              : `No NOTAM feed for ${iata}.`}
+          </Empty>
+        ) : notams.length === 0 ? (
+          <Empty>No NOTAMs in force for {iata}.</Empty>
+        ) : (
+          <NotamList key={icao} rows={notams} />
         )}
       </Section>
 

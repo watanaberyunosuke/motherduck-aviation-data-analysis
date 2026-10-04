@@ -11,6 +11,8 @@ later runs update them (each update is a new version in MotherDuck).
   unscheduled; scripts/run_flight.py starts it hourly from GitHub Actions.
 - Flight secret `opensky`: (re)created from OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET when
   both are set, otherwise it must already exist.
+- Flight secret `faa` (optional): the same from FAA_CLIENT_ID / FAA_CLIENT_SECRET. When it
+  neither can be created nor exists, the Flight is published without it and skips FAA NOTAMs.
 - Dive "Airport conditions" (dives/airport_conditions).
 """
 from __future__ import annotations
@@ -34,8 +36,11 @@ FLIGHT_NAME = "aviation_pipeline"
 FLIGHT_DIR = ROOT / "flights" / FLIGHT_NAME
 # No schedule_cron: MotherDuck only schedules Flights on a Business plan, so the hourly
 # trigger is the cron in .github/workflows/ingest.yml (scripts/run_flight.py).
-FLIGHT_SECRET = "opensky"
-FLIGHT_SECRET_KEYS = ("OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET")
+# name -> (environment variables it holds, whether the Flight needs it to run at all)
+FLIGHT_SECRETS = {
+    "opensky": (("OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET"), True),
+    "faa": (("FAA_CLIENT_ID", "FAA_CLIENT_SECRET"), False),
+}
 
 DIVE_DIR = ROOT / "dives" / "airport_conditions"
 
@@ -59,30 +64,37 @@ def git(*args: str) -> str:
                           text=True).stdout.strip()
 
 
-def ensure_flight_secret(con: duckdb.DuckDBPyConnection) -> None:
-    values = {k: os.environ.get(k, "").strip() for k in FLIGHT_SECRET_KEYS}
+def ensure_flight_secret(con: duckdb.DuckDBPyConnection, name: str, keys: tuple[str, ...],
+                         required: bool) -> bool:
+    """Create or refresh the secret from the environment; True if it exists afterwards."""
+    values = {k: os.environ.get(k, "").strip() for k in keys}
     if all(values.values()):
-        con.execute(f"create or replace secret {FLIGHT_SECRET} in motherduck "
+        con.execute(f"create or replace secret {name} in motherduck "
                     f"(type flights, params {sql_map(values)})")
-        print(f"flight secret {FLIGHT_SECRET}: updated")
-        return
+        print(f"flight secret {name}: updated")
+        return True
     exists = con.execute("select count(*) from duckdb_secrets() where name = ?",
-                         [FLIGHT_SECRET]).fetchone()[0]
-    if not exists:
-        raise SystemExit(f"Flight secret {FLIGHT_SECRET!r} does not exist. Set "
-                         f"{' and '.join(FLIGHT_SECRET_KEYS)} and re-run to create it.")
-    print(f"flight secret {FLIGHT_SECRET}: kept existing")
+                         [name]).fetchone()[0]
+    if exists:
+        print(f"flight secret {name}: kept existing")
+        return True
+    if required:
+        raise SystemExit(f"Flight secret {name!r} does not exist. Set "
+                         f"{' and '.join(keys)} and re-run to create it.")
+    print(f"flight secret {name}: not set; the Flight runs without it")
+    return False
 
 
 def deploy_flight(con: duckdb.DuckDBPyConnection, sha: str) -> None:
-    ensure_flight_secret(con)
+    secrets = [name for name, (keys, required) in FLIGHT_SECRETS.items()
+               if ensure_flight_secret(con, name, keys, required)]
     source = ((FLIGHT_DIR / "main.py").read_text()
               .replace("__REPO__", REPO).replace("__GIT_SHA__", sha))
     args = {
         "source_code": sql_str(source),
         "requirements_txt": sql_str((FLIGHT_DIR / "requirements.txt").read_text()),
         "config": sql_map({"WAREHOUSE": f"md:{DATABASE}", "SOURCES": ""}),
-        "flight_secret_names": sql_list([FLIGHT_SECRET]),
+        "flight_secret_names": sql_list(secrets),
     }
     named = ", ".join(f"{k} := {v}" for k, v in args.items())
     ids = [r[0] for r in con.execute(

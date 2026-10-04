@@ -2,7 +2,7 @@
 
 ## NOTAM source for Australia and Singapore
 
-**Status:** Parked (2026-10-03). NOTAMs are ingested for Hong Kong only.
+**Status (2026-10-04):** WSSS, EHAM and PANC now load from FAA NOTAM Search (`src/aviation/sources/notam_faa_search.py`), the website's backend reached with curl_cffi's Chrome fingerprint. First run from a home connection: 134 records, 120 kept after dropping DoD "V" NOTAMs and Letters to Airmen; EHAM's international NOTAMs carry full ICAO text. Still to confirm: that it works from the Flight's cloud IPs, and coverage against CAAS / LVNL. An FAA NOTAM API client (`notam_faa.py`, needs `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET`, untested live) is kept as the fallback. Australia stays without a source.
 
 **Why it matters:** without NOTAMs for YSSY, YMML, YBBN and WSSS, runway closures cannot explain excess terminal-area time at those airports. `fct_arrival_weather_impact` leaves `surface_notam_in_force` and `runway_closure_in_force` null there (`has_notam_feed = false`).
 
@@ -25,5 +25,5 @@
 | ICAO API Data Service | 100 free calls, then booster packs (prices unlisted) | NOTAMs come from FAA DINS. |
 | autorouter | Free, no key | Europe only; using the data needs a Eurocontrol EAD licence (several thousand euros a year). |
 | FAA DINS | Was free | `www.notams.faa.gov` did not resolve; possibly retired. |
-| FAA NOTAM Search | Free website | Blocks scripted requests (403). |
+| FAA NOTAM Search | Free website | Blocks plain scripted requests (403); works with curl_cffi's Chrome fingerprint (in use since 2026-10-04). |
 | Airservices NAIPS, CAAS AIM-SG | Free accounts | Official, but web pages for pilots, not APIs. |

@@ -5,11 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aviation-data-analysis"
 version = "0.1.0"
-description = "Weather, NOTAM and ADS-B flight-path analysis for Australian, Singapore and Hong Kong airports"
+description = "Weather, NOTAM and ADS-B flight-path analysis for airports in Australia, Asia, Europe and Alaska"
 requires-python = ">=3.10"
 dependencies = [
   "duckdb>=1.1",
   "requests>=2.31",
+  "curl_cffi>=0.7",
   "pyyaml>=6.0",
   "dbt-core>=1.12.5",
   "fastapi>=0.115",
