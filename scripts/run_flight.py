@@ -24,7 +24,13 @@ import duckdb
 from deploy_motherduck import FLIGHT_NAME, sql_map, sql_str
 
 POLL_SECONDS = 15
-TERMINAL = {"RUN_STATUS_SUCCEEDED", "RUN_STATUS_FAILED", "RUN_STATUS_CANCELLED"}
+# MotherDuck has reported run status both as RUN_STATUS_SUCCEEDED and as plain
+# SUCCEEDED; compare without the prefix so either form ends the wait.
+TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED"}
+
+
+def normalise(status: object) -> str:
+    return str(status).upper().removeprefix("RUN_STATUS_")
 
 
 def flight_id(con: duckdb.DuckDBPyConnection) -> str:
@@ -63,7 +69,7 @@ def main() -> None:
 
     exit_code = None
     deadline = time.monotonic() + args.timeout_minutes * 60
-    while status not in TERMINAL:
+    while normalise(status) not in TERMINAL:
         if time.monotonic() > deadline:
             print_logs(con, fid, run_number)
             raise SystemExit(f"run {run_number} still {status} after "
@@ -76,7 +82,7 @@ def main() -> None:
 
     print_logs(con, fid, run_number)
     print(f"flight {FLIGHT_NAME}: run {run_number} {status}, exit code {exit_code}")
-    if status != "RUN_STATUS_SUCCEEDED":
+    if normalise(status) != "SUCCEEDED":
         sys.exit(1)
 
 

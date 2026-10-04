@@ -126,6 +126,9 @@ run_flight = _load("run_flight", ROOT / "scripts" / "run_flight.py")
     (("RUN_STATUS_SUCCEEDED", 0), True),
     (("RUN_STATUS_FAILED", 1), False),
     (("RUN_STATUS_CANCELLED", None), False),
+    # The unprefixed form MotherDuck returned on 2026-10-04 must end the wait too.
+    (("SUCCEEDED", 0), True),
+    (("FAILED", 1), False),
 ])
 def test_run_flight_waits_and_reports(monkeypatch, capsys, final, ok):
     con = _FakeMotherDuck(statuses=[("RUN_STATUS_RUNNING", None), final])
