@@ -10,7 +10,8 @@ name: ci-cd
 #         dbt, the Flight and the Dive each only run when the push changed their files
 #         (see "Detect changes"); a manual run does all three.
 # Required secrets (repository or `production` environment): MOTHERDUCK_TOKEN,
-# OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET (copied into the Flight's `opensky` secret)
+# OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET (copied into the Flight's `opensky` secret).
+# Optional: FAA_CLIENT_ID, FAA_CLIENT_SECRET (the Flight's `faa` secret, for FAA NOTAMs).
 
 on:
   pull_request:
@@ -113,13 +114,15 @@ jobs:
         working-directory: dbt
         run: uv run dbt build --profiles-dir .
 
-      # Points the hourly Flight at this commit (and refreshes its OpenSky secret), then
+      # Points the hourly Flight at this commit (and refreshes its secrets), then
       # publishes the Dive. Runs after dbt so the Dive never queries a mart that isn't built.
       - name: Publish MotherDuck Flight and Dive
         if: steps.changes.outputs.flight == 'true' || steps.changes.outputs.dive == 'true'
         env:
           OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
           OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
+          FAA_CLIENT_ID: ${{ secrets.FAA_CLIENT_ID }}
+          FAA_CLIENT_SECRET: ${{ secrets.FAA_CLIENT_SECRET }}
           FLIGHT: ${{ steps.changes.outputs.flight }}
           DIVE: ${{ steps.changes.outputs.dive }}
         run: |

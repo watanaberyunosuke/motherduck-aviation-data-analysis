@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from aviation import warehouse
-from aviation.sources import aviationweather, notam_hk, notam_rapidapi, opensky
+from aviation.sources import aviationweather, notam_faa, notam_hk, notam_rapidapi, opensky
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -69,6 +69,55 @@ def test_rapidapi_uses_structured_fields_and_fills_q_code_when_icao():
 def test_rapidapi_schema_change_fails_loudly():
     with pytest.raises(notam_rapidapi.SchemaMismatch):
         notam_rapidapi.rows("YSSY", {"data": []})
+
+
+# Shape from the FAA NOTAM API docs (GeoJSON format, trimmed). One international NOTAM with
+# an ICAO translation, one US domestic NOTAM with only the local-format text.
+def _faa_item(notam: dict, translations: list[dict]) -> dict:
+    return {"type": "Feature", "geometry": None,
+            "properties": {"coreNOTAMData": {"notam": notam, "notamTranslation": translations}}}
+
+
+FAA_ITEMS = [
+    _faa_item(
+        {"id": "NOTAM_1", "number": "A1234/26", "type": "N", "selectionCode": "QMRLC",
+         "icaoLocation": "EHAM", "effectiveStart": "2026-10-01T22:00:00.000Z",
+         "effectiveEnd": "2026-10-02T05:00:00.000Z", "text": "RWY 18R/36L CLSD",
+         "classification": "INTL"},
+        [{"type": "ICAO", "formattedText":
+          "A1234/26 NOTAMN\nQ) EHAA/QMRLC/IV/NBO/A/000/999/5219N00446E005\n"
+          "A) EHAM B) 2610012200 C) 2610020500 EST\nE) RWY 18R/36L CLSD"}]),
+    _faa_item(
+        {"id": "NOTAM_2", "number": "10/045", "type": "N", "icaoLocation": "PANC",
+         "effectiveStart": "2026-10-01T00:00:00.000Z", "effectiveEnd": "PERM",
+         "text": "OBST CRANE 610218N1495937W 210FT AGL", "classification": "DOM"},
+        [{"type": "LOCAL_FORMAT", "simpleText": "!ANC 10/045 ANC OBST CRANE"}]),
+]
+
+
+def test_faa_parses_icao_translation_and_falls_back_to_structured_fields():
+    now = warehouse.utcnow()
+    intl, dom = notam_faa.rows("EHAM", FAA_ITEMS, now)
+    assert intl["notam_key"] == "EHAM:A1234/26" and intl["fir"] == "EHAA"
+    assert intl["q_code"] == "QMRLC" and intl["is_estimated"] is True
+    assert intl["ends_at"].isoformat() == "2026-10-02T05:00:00+00:00"
+    assert intl["raw_text"].startswith("A1234/26 NOTAMN")
+    assert dom["notam_key"] == "PANC:10/045" and dom["location"] == "PANC"
+    assert dom["q_code"] is None and dom["is_permanent"] is True and dom["ends_at"] is None
+    assert dom["starts_at"].isoformat() == "2026-10-01T00:00:00+00:00"
+    assert dom["raw_text"] == dom["body"] == "OBST CRANE 610218N1495937W 210FT AGL"
+    assert intl["last_seen_at"] == dom["last_seen_at"] == now
+
+
+def test_faa_rows_load_into_raw_notam(con):
+    rows = notam_faa.rows("EHAM", FAA_ITEMS, warehouse.utcnow())
+    warehouse.upsert(con, "raw.notam", rows, ["source", "notam_key"], keep_on_conflict=("first_seen_at",))
+    assert con.execute("select count(*) from raw.notam where source = 'faa'").fetchone()[0] == 2
+
+
+def test_faa_schema_change_fails_loudly():
+    with pytest.raises(notam_faa.SchemaMismatch):
+        notam_faa.rows("EHAM", [{"properties": {}}], warehouse.utcnow())
 
 
 def test_opensky_day_window_is_a_whole_utc_day():

@@ -2,7 +2,7 @@
 
 ## NOTAM source for Australia and Singapore
 
-**Status:** Parked (2026-10-03). NOTAMs are ingested for Hong Kong only.
+**Status (2026-10-04):** an FAA NOTAM API client (`src/aviation/sources/notam_faa.py`, `GET external-api.faa.gov/notamapi/v1/notams`) now serves WSSS, EHAM and PANC, but is untested against the live API: it needs `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET`, and the endpoint answers 401 without them. Still to confirm on the first real run: that api.faa.gov issues keys for it (or whether NMS access via notams@faa.gov is now the only route), that WSSS and EHAM return international NOTAMs with an ICAO translation, and coverage against CAAS / LVNL. Until a key is set those airports show no NOTAM feed. Australia stays without a source.
 
 **Why it matters:** without NOTAMs for YSSY, YMML, YBBN and WSSS, runway closures cannot explain excess terminal-area time at those airports. `fct_arrival_weather_impact` leaves `surface_notam_in_force` and `runway_closure_in_force` null there (`has_notam_feed = false`).
 

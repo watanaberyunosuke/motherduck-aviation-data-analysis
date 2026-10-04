@@ -75,7 +75,9 @@ models:
       - name: arrival_iata
         tests: [not_null]
       - name: has_notam_feed
-        description: False for airports with no NOTAM source (currently AU and SG).
+        description: >
+          False when the arrival landed before its airport's NOTAM source first loaded,
+          or the airport has no NOTAM source (currently the Australian airports).
         tests: [not_null]
       - name: surface_notam_in_force
         description: Null when has_notam_feed is false (unknown, not "none in force").

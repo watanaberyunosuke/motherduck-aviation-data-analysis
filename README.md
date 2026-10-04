@@ -1,8 +1,8 @@
 # Aviation data analysis
 
-How much does weather and runway availability cost arriving flights at Sydney, Melbourne, Brisbane, Singapore and Hong Kong?
+How much does weather and runway availability cost arriving flights at Sydney, Melbourne, Brisbane, Singapore, Hong Kong, Amsterdam and Anchorage?
 
-- Ingests METAR/TAF weather, NOTAMs (Hong Kong only for now) and ADS-B flight paths on a schedule into DuckDB (local) or MotherDuck (scheduled runs).
+- Ingests METAR/TAF weather, NOTAMs (every airport except the Australian ones) and ADS-B flight paths on a schedule into DuckDB (local) or MotherDuck (scheduled runs).
 - Transforms with dbt into marts that line up each arrival with the weather and NOTAMs in force when it landed.
 - Measures **excess terminal-area time**, the minutes an arrival spends within 50 NM of its destination beyond that airport's rolling median. This is the weather-sensitive part of a flight: holding, vectoring and go-arounds.
 - Scheduled by a [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) and visualised in a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/). The same Dive is also served on Vercel, running in the browser on DuckDB-WASM.
@@ -13,12 +13,15 @@ How much does weather and runway availability cost arriving flights at Sydney, M
 
 | Data | Source | Airports | Access | Cadence |
 |---|---|---|---|---|
-| METAR, TAF | [Aviation Weather Center Data API](https://aviationweather.gov/data/api/) | All five | Free, no key | Hourly |
+| METAR, TAF | [Aviation Weather Center Data API](https://aviationweather.gov/data/api/) | All seven | Free, no key | Hourly |
 | NOTAMs (Hong Kong) | [HK CAD NOTAM website](https://www.notam.ais.gov.hk/), JSON at `/data` | VHHH, VHHK FIR | Free, official, no key | Every 3 h |
-| NOTAMs (AU, SG) | None at present | YSSY, YMML, YBBN, WSSS | See below | Not ingested |
-| Flights, flight paths | [OpenSky Network REST API](https://openskynetwork.github.io/opensky-api/rest.html) | All five | Free account, OAuth2 client | Daily |
+| NOTAMs (US and international) | [FAA NOTAM API](https://api.faa.gov/s/) | WSSS, EHAM, PANC | Free account, client id + secret | Every 3 h |
+| NOTAMs (AU) | None at present | YSSY, YMML, YBBN | See below | Not ingested |
+| Flights, flight paths | [OpenSky Network REST API](https://openskynetwork.github.io/opensky-api/rest.html) | All seven | Free account, OAuth2 client | Daily |
 
-Australia (Airservices NAIPS) and Singapore (CAAS AIM-SG) publish live NOTAMs only to registered users, and there is no free third-party feed. A client for the paid [SkyLink NOTAM API](https://github.com/SkyLink-API/notam-api) on RapidAPI (Basic plan $18.59/month for 5,000 requests; no free tier) is kept in `src/aviation/sources/notam_rapidapi.py` but is switched off. To re-enable it, set `notam_source: rapidapi` for those airports in `config/airports.yml` and `dbt/seeds/airports.csv`, add `RAPIDAPI_KEY`, and restore the 6-hourly schedule in `ingest.yml`.
+The FAA NOTAM API serves US NOTAMs and the international NOTAMs the FAA receives through the ICAO exchange, which is how Singapore and Amsterdam are covered. It is a copy, not the issuing authority (CAAS, LVNL), so spot-check it against the official source before relying on completeness. Without `FAA_CLIENT_ID` / `FAA_CLIENT_SECRET` the FAA step is skipped, and those airports show no NOTAM feed rather than zero NOTAMs: the marts only treat a source as a feed once it has loaded, and only for arrivals after it first did.
+
+Australia (Airservices NAIPS) publishes live NOTAMs only to registered users. Its NOTAMs should also reach the FAA API; switch the Australian airports to `notam_source: faa` once a spot-check against NAIPS shows the FAA copy is complete. A client for the paid [SkyLink NOTAM API](https://github.com/SkyLink-API/notam-api) on RapidAPI (Basic plan $18.59/month for 5,000 requests; no free tier) is kept in `src/aviation/sources/notam_rapidapi.py` but is switched off. To re-enable it, set `notam_source: rapidapi` for those airports in `config/airports.yml` and `dbt/seeds/airports.csv`, add `RAPIDAPI_KEY`, and restore the 6-hourly schedule in `ingest.yml`.
 
 ## 2. Architecture
 
@@ -60,10 +63,11 @@ To add true schedule delay later you would need a schedules source (these are ge
 ```bash
 conda create -n aviation python=3.11 -y && conda activate aviation
 pip install -e ".[dev]"
-cp .env.example .env        # fill in OPENSKY_*
+cp .env.example .env        # fill in OPENSKY_* (and FAA_* for FAA NOTAMs)
 
 make ingest-weather          # works with no credentials
 aviation ingest notam-hk     # works with no credentials
+aviation ingest notam-faa    # needs FAA NOTAM API credentials
 make ingest-all              # needs OpenSky credentials
 make transform               # dbt seed + run + test
 make test                    # pytest, including a full dbt build on a temp database
@@ -72,6 +76,7 @@ make test                    # pytest, including a full dbt build on a temp data
 Credentials:
 
 - **OpenSky**: create a free account, then Account > API client. New accounts must use OAuth2 client credentials.
+- **FAA NOTAM API** (optional): register at [api.faa.gov](https://api.faa.gov/s/) and request access to the NOTAM API; it issues a client id and secret. Set `FAA_CLIENT_ID` and `FAA_CLIENT_SECRET`.
 - **MotherDuck** (scheduled runs only): set `WAREHOUSE=md:aviation` and `MOTHERDUCK_TOKEN`. Check MotherDuck's current free-tier limits before relying on it.
 
 ## 5. Scheduling and dashboards
@@ -83,10 +88,10 @@ A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs the pi
 | UTC hour | Sources |
 |---|---|
 | Every hour | METAR, TAF |
-| 0, 3, 6, … 21 | + Hong Kong NOTAMs |
+| 0, 3, 6, … 21 | + Hong Kong and FAA NOTAMs |
 | 6 | + OpenSky flights and tracks for yesterday |
 
-The source is `flights/aviation_pipeline/main.py`. OpenSky credentials come from a Flight secret named `opensky`, which the deploy creates from the GitHub secrets. To run it now, or with other sources:
+The source is `flights/aviation_pipeline/main.py`. OpenSky credentials come from a Flight secret named `opensky`, and FAA NOTAM API credentials from an optional one named `faa`; the deploy creates both from the GitHub secrets. Without `faa` the Flight skips FAA NOTAMs. To run it now, or with other sources:
 
 ```sql
 -- flight_id from: select flight_id from md_list_flights() where flight_name = 'aviation_pipeline'
@@ -95,7 +100,7 @@ select * from md_list_flight_runs(flight_id := '<id>') order by run_number desc 
 select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
 ```
 
-`SOURCES` takes space-separated sources (`metar taf notam-hk opensky`), or `none` for dbt only.
+`SOURCES` takes space-separated sources (`metar taf notam-hk notam-faa opensky`), or `none` for dbt only.
 
 From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `runner: github` runs ingest and dbt on the GitHub runner instead of the Flight, as a fallback if the Flight is unavailable.
 
@@ -109,7 +114,8 @@ This repository is public, so `push_sessions` is `false`: checkpoints are stored
 
 `dives/airport_conditions/index.tsx` is a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/), a React component that MotherDuck hosts and that queries `aviation.marts` live. It opens with clocks for UTC, the selected airport and Melbourne, and 7-day weather shares for every airport, then drills into one airport (HKG by default):
 
-- current conditions: the latest METAR decoded and raw, the latest TAF, and NOTAMs in force;
+- current conditions: the latest METAR decoded and raw, the latest TAF, and the number of NOTAMs in force;
+- NOTAMs in force: the full text of every NOTAM for the airport whose validity covers now, newest first, with its Q-code category, validity and any schedule, filterable by category;
 - an airspace map: live aircraft within 500 NM, with this airport's inbound and outbound flights coloured by delay status (red / amber / green), observed arrival and departure paths of tracked flights over the last 3 days (which trace the procedures in use), the 50 NM terminal area and the wind. Official SID/STAR geometry is not drawn: no free procedure data covers these airports;
 - en route flights: airborne inbound and outbound flights within 500 NM with a red / amber / green delay status, distance, altitude, speed, usual time and a rough ETA. Live ADS-B carries no origin, destination or schedule, so both direction and "usual time" come from the callsign's last 30 days at the airport (`fct_arrivals` / `fct_departures`; usual time is the median local time of day, wrapped around midnight). Delay compares the ETA (inbound: ground speed to the 50 NM ring plus the airport's median terminal time) or estimated take-off (outbound, the same backwards) with that usual time: green under 15 min late, amber 15-44, red 45 or more. It is a proxy for schedule delay, not a substitute;
 - arrival statistics, 72 hours of wind and flight category, daily movements, the weather penalty, every arrival observed on the latest local day (from any origin) and the slowest arrivals;
@@ -143,7 +149,7 @@ cd web && npm ci && npm run dev                                    # proxies /ap
 `ci.yml` is the CI/CD pipeline:
 
 - **test**: on every push and pull request, runs `pytest` (including a full dbt build on a temporary DuckDB file) on Python 3.11 and 3.14.
-- **deploy**: on pushes to `main`, after tests pass, rebuilds seeds and runs `dbt build` against MotherDuck (`md:aviation`), creating the database if it does not exist. It then points the Flight at the new commit and publishes the Dive. It uses the `production` environment, so you can add required reviewers under Settings > Environments. It needs the `MOTHERDUCK_TOKEN`, `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` secrets.
+- **deploy**: on pushes to `main`, after tests pass, rebuilds seeds and runs `dbt build` against MotherDuck (`md:aviation`), creating the database if it does not exist. It then points the Flight at the new commit and publishes the Dive. It uses the `production` environment, so you can add required reviewers under Settings > Environments. It needs the `MOTHERDUCK_TOKEN`, `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` secrets, and optionally `FAA_CLIENT_ID` and `FAA_CLIENT_SECRET`.
 
 Deploy and the ingest workflow share a concurrency group, so they never write to the warehouse at the same time. Because the ingest job waits for the Flight run, the group covers the Flight too, unless you start a run directly with `md_run_flight`. Both install dependencies from `uv.lock`; after changing dependencies in `pyproject.toml`, run `uv lock` and commit the lockfile.
 
@@ -165,6 +171,8 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 | `Environment variable X is not set` | Copy `.env.example` to `.env`, or add the GitHub secret. Other sources still run. |
 | OpenSky `403 You cannot access historical flights` | Missing or invalid OAuth client. Check `OPENSKY_CLIENT_ID` / `SECRET`. |
 | OpenSky run logs `stopped early` | Daily credit floor reached. Lower `max_tracks_per_run` or run later; flights already landed are kept. |
+| `notam faa: skipped - FAA_CLIENT_ID / FAA_CLIENT_SECRET not set` | Expected without FAA credentials. Add them to `.env`, the GitHub secrets and (via a deploy) the Flight's `faa` secret. |
+| `SchemaMismatch` from the FAA API | Response shape changed. Inspect one raw response and update `notam_faa.rows`. |
 | `SchemaMismatch` from RapidAPI (if re-enabled) | Provider changed its response. Inspect one raw response and update `notam_rapidapi.rows`. |
 | Days or hours look shifted | dbt forces `TimeZone: UTC` in `profiles.yml`. Ad hoc DuckDB sessions do not: run `set TimeZone='UTC'`. |
 | Deploy fails on a seed column change | Should not happen: deploy runs `dbt seed --full-refresh`. Scheduled ingest runs do not, so let a deploy finish before the next ingest. |
@@ -177,7 +185,7 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 ## 8. Next steps
 
 1. Add credentials and run a week of OpenSky ingestion to see real coverage per airport.
-2. Find a NOTAM source for Australia and Singapore. Parked; options and plan in [BACKLOG.md](BACKLOG.md).
+2. Add FAA credentials, spot-check FAA NOTAM coverage for WSSS and EHAM against CAAS / LVNL, then try the Australian airports on the FAA source. Earlier options in [BACKLOG.md](BACKLOG.md).
 3. Add the live NOTAM map (dropped with the old Vercel dashboard) to the Dive, so both the Dive and the Vercel site show it.
 4. TAF skill: compare `stg_taf` forecasts with the METARs that followed.
 5. Stretch: model excess terminal time from weather and NOTAM features.

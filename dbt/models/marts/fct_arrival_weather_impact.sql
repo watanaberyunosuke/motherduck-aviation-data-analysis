@@ -4,10 +4,19 @@
 {% set baseline_days = var('baseline_days') %}
 {% set metar_max_age = var('metar_max_age_minutes') %}
 
-with arrivals as (
-    select m.*, a.notam_source is not null as has_notam_feed
+-- When each NOTAM source first loaded. Arrivals before that have no NOTAM data, which is
+-- not the same as having no NOTAMs.
+with notam_feeds as (
+    select source, min(first_seen_at) as feed_started_at
+    from {{ ref('stg_notam') }}
+    group by source
+),
+
+arrivals as (
+    select m.*, coalesce(m.last_airborne_at >= f.feed_started_at, false) as has_notam_feed
     from {{ ref('fct_flight_track_metrics') }} m
     join {{ ref('airports') }} a on a.icao = m.arrival_icao
+    left join notam_feeds f on f.source = a.notam_source
     where m.has_arrival_coverage
       and m.terminal_entry_at is not null
 ),
@@ -31,8 +40,8 @@ with_weather as (
 with_notams as (
     select
         ww.*,
-        -- Null, not false, when the airport has no NOTAM feed: absence of data is not
-        -- absence of a closure.
+        -- Null, not false, when the airport had no NOTAM feed at the time: absence of
+        -- data is not absence of a closure.
         case when ww.has_notam_feed then exists (
             select 1 from {{ ref('fct_notams') }} n
             where n.location = ww.arrival_icao

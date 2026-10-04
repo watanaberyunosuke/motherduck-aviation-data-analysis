@@ -257,11 +257,13 @@ def test_airport_conditions_one_row_per_airport(built):
     con, _ = built
     rows = con.execute("""select icao, iata, timezone, metar_raw is not null, notams_in_force
                           from marts.fct_airport_conditions order by icao""").fetchall()
-    assert [r[0] for r in rows] == ["VHHH", "WSSS", "YBBN", "YMML", "YSSY"]
+    assert [r[0] for r in rows] == ["EHAM", "PANC", "VHHH", "WSSS", "YBBN", "YMML", "YSSY"]
     by_icao = {r[0]: r for r in rows}
     assert by_icao["YMML"][1:4] == ("MEL", "Australia/Melbourne", True)
     assert by_icao["YMML"][4] is None, "no NOTAM feed: unknown, not zero"
     assert by_icao["VHHH"][4] is not None
+    # EHAM has a NOTAM source (faa), but it never loaded here, so still unknown.
+    assert by_icao["EHAM"][1:3] == ("AMS", "Europe/Amsterdam") and by_icao["EHAM"][4] is None
 
 
 def test_terminal_tracks_stay_near_the_airport(built):

@@ -48,6 +48,7 @@ TABLES = {
     "marts.fct_departures": "departed_at >= now() - interval 31 day",
     "marts.fct_arrival_weather_impact": "true",
     "marts.fct_terminal_tracks": "point_at >= now() - interval 3 day",
+    "marts.fct_notams": "is_current",
 }
 
 # Vercel's edge caches each export for 10 minutes (stale-while-revalidate: the first

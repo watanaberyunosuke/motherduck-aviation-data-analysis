@@ -12,8 +12,10 @@ change which code runs.
 Config (Flight config, overridable per run with MD_RUN_FLIGHT(config := MAP {...})):
     WAREHOUSE  dbt / ingest target, e.g. md:aviation
     SOURCES    space-separated sources to run instead of this hour's plan,
-               e.g. 'opensky' or 'metar taf notam-hk opensky'. 'none' runs dbt only.
+               e.g. 'opensky' or 'metar taf notam-hk notam-faa opensky'. 'none' runs dbt only.
 Secret `opensky` (TYPE flights): OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET.
+Secret `faa` (TYPE flights, optional): FAA_CLIENT_ID, FAA_CLIENT_SECRET. Without it the
+FAA NOTAM step is skipped.
 MOTHERDUCK_TOKEN is injected by the Flight runtime.
 """
 from __future__ import annotations
@@ -36,7 +38,7 @@ def sources_for_hour(hour: int) -> list[str]:
     """The schedule ingest.yml used, folded into one hourly run at :07 UTC."""
     sources = ["metar", "taf"]
     if hour % 3 == 0:
-        sources.append("notam-hk")
+        sources += ["notam-hk", "notam-faa"]
     if hour == 6:
         sources.append("opensky")  # flights + tracks for yesterday; slowest, so last
     return sources
