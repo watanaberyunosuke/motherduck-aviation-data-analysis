@@ -1,12 +1,13 @@
-"""Airport departures and arrivals from AeroDataBox, the preferred flights source.
+"""Airport departures and arrivals from AeroDataBox, the fallback flights source.
 
 Docs: https://doc.aerodatabox.com  (paid; sold through RapidAPI, API.market or directly)
 
 Unlike OpenSky, AeroDataBox knows the timetable: each flight carries its scheduled time
 next to the revised (actual or estimated) and runway times, so schedule delay can be
-measured instead of inferred. OpenSky stays as the fallback: dbt prefers AeroDataBox for
-every (airport, direction, UTC day) slot it has loaded and uses OpenSky for the rest, and
-OpenSky remains the only source of flight paths.
+measured instead of inferred. OpenSky is still preferred (it is free and also supplies
+the flight paths): AeroDataBox loads an airport-day only where OpenSky returned no flights
+for it, or, when OpenSky fails, wherever OpenSky has not loaded. dbt uses OpenSky for every
+(airport, direction, UTC day) slot it has flights for and AeroDataBox for the rest.
 
 Endpoint: GET /flights/airports/icao/{icao}/{fromLocal}/{toLocal} ("FIDS", TIER 2). One
 call returns both directions for at most 12 hours of local time on most plans, so a UTC
@@ -15,7 +16,7 @@ for arrivals, destination for departures). How far back it reaches depends on th
 (about a year at most); `backfill_days` in config/airports.yml (30) is well inside it.
 
 Credentials: AERODATABOX_KEY, the key of whichever marketplace `provider` names. Without
-it the source is skipped and every slot falls back to OpenSky.
+it the source is skipped and OpenSky alone covers flights.
 """
 from __future__ import annotations
 
@@ -180,10 +181,33 @@ def done_days(con: duckdb.DuckDBPyConnection, icao: str) -> set[date]:
     """, [icao]).fetchall()}
 
 
-def ingest(con: duckdb.DuckDBPyConnection, timezones: dict[str, str], cfg: dict) -> dict:
-    """Every airport-day not yet loaded, from the newest complete UTC day back to
-    `backfill_days`, newest first, within `max_backfill_calls_per_run` calls. Loaded days
-    are skipped, so the hourly run spends paid units only on gaps (a new day is 14 calls)."""
+def opensky_rows(con: duckdb.DuckDBPyConnection, icao: str) -> dict[date, dict[str, int]]:
+    """Flights OpenSky loaded per day and direction, for the days it has fetched."""
+    out: dict[date, dict[str, int]] = {}
+    for day, direction, rows in con.execute("""
+        select day_utc, direction, rows from raw.flight_slots
+        where source = 'opensky' and icao = ?
+    """, [icao]).fetchall():
+        out.setdefault(day, {})[direction] = rows
+    return out
+
+
+def needed(opensky: dict[str, int], opensky_ok: bool) -> bool:
+    """Whether to fall back to AeroDataBox for an airport-day, given OpenSky's flights per
+    direction for it. Never where OpenSky has both directions. While OpenSky works, only
+    where it came back empty: it fills the days it has not reached on later runs, for free.
+    When it has failed, wherever it has not loaded."""
+    if all(opensky.get(d, 0) > 0 for d in ("arrival", "departure")):
+        return False
+    return not opensky_ok or 0 in opensky.values()
+
+
+def ingest(con: duckdb.DuckDBPyConnection, timezones: dict[str, str], cfg: dict,
+           opensky_ok: bool = True) -> dict:
+    """Airport-days OpenSky has not covered (see `needed`) and AeroDataBox has not loaded,
+    from the newest complete UTC day back to `backfill_days`, newest first, within
+    `max_backfill_calls_per_run` calls. Loaded days are skipped, so the hourly run spends
+    paid units only on gaps (a day for all seven airports is 14 calls)."""
     client = AeroDataBoxClient(cfg.get("provider", "rapidapi"))
     today = warehouse.utcnow().date()
     newest = warehouse.newest_complete_day(int(cfg.get("days_back", 1)))
@@ -194,10 +218,11 @@ def ingest(con: duckdb.DuckDBPyConnection, timezones: dict[str, str], cfg: dict)
     try:
         # Round-robin by day, so every airport advances together.
         done = {icao: done_days(con, icao) for icao in timezones}
+        opensky = {icao: opensky_rows(con, icao) for icao in timezones}
         for back in range(newest, oldest + 1):
             day = today - timedelta(days=back)
             for icao, tz in timezones.items():
-                if day in done[icao]:
+                if day in done[icao] or not needed(opensky[icao].get(day, {}), opensky_ok):
                     continue
                 if client.calls + len(windows(day, ZoneInfo(tz))) > budget:
                     raise QuotaExhausted(f"budget of {budget} calls spent")

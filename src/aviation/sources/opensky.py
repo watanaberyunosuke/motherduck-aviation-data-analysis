@@ -19,11 +19,11 @@ dbt marts measure observable performance instead (see README, section 3).
 OpenSky's receiver coverage is densest in Europe and North America. Expect gaps for
 Australian and Asian airports, particularly at low altitude on approach.
 
-AeroDataBox (sources/aerodatabox.py) is the preferred flights source, because it has
-schedules; OpenSky is the fallback for slots AeroDataBox has not loaded, and the only
-source of flight paths. Each airport-day costs 30 of the roughly 4,000 daily flights
-credits, so filling the `backfill_days` window (30 days) takes a few days of hourly runs;
-after that each day's run loads just the new day.
+OpenSky is the preferred flights source, and the only source of flight paths.
+AeroDataBox (sources/aerodatabox.py) is the fallback: it fills the days OpenSky returned
+nothing for, or everything OpenSky has not loaded when OpenSky fails. Each airport-day
+costs 30 of the roughly 4,000 daily flights credits, so filling the `backfill_days` window
+(30 days) takes a few days of hourly runs; after that each day's run loads just the new day.
 """
 from __future__ import annotations
 
@@ -171,9 +171,11 @@ def select_flights_to_track(con: duckdb.DuckDBPyConnection, icaos: list[str],
 
 
 def done_slots(con: duckdb.DuckDBPyConnection) -> set[tuple[str, str, date]]:
-    """(icao, direction, day) slots already fetched from either source."""
+    """(icao, direction, day) slots OpenSky has already fetched. Slots AeroDataBox loaded
+    are fetched again: OpenSky is preferred, and staging switches to it once it has them."""
     return {tuple(r) for r in con.execute(
-        "select distinct icao, direction, day_utc from raw.flight_slots").fetchall()}
+        "select icao, direction, day_utc from raw.flight_slots where source = 'opensky'"
+    ).fetchall()}
 
 
 def ingest_slot(con: duckdb.DuckDBPyConnection, client: OpenSkyClient, icao: str,
@@ -186,8 +188,8 @@ def ingest_slot(con: duckdb.DuckDBPyConnection, client: OpenSkyClient, icao: str
 
 
 def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], cfg: dict) -> dict:
-    """Every (airport, direction) day not yet loaded by either source, from the newest
-    complete day back to `backfill_days`, newest first, then tracks for the newest day.
+    """Every (airport, direction) day OpenSky has not loaded, from the newest complete day
+    back to `backfill_days`, newest first, then tracks for the newest day.
 
     Loaded slots are skipped, so the hourly run spends credits only on gaps: a new day
     once a day, older days until the window is full, and more tracks while the tracks

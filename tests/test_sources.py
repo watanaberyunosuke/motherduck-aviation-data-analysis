@@ -385,14 +385,17 @@ def test_opensky_fetches_only_missing_slots(con, monkeypatch):
     monkeypatch.setattr(opensky, "OpenSkyClient", _FakeOpenSky)
     monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
     _FakeOpenSky.calls = []
-    # AeroDataBox already has YSSY arrivals for 3 Oct: OpenSky must not spend credits on it.
-    warehouse.mark_slot(con, "aerodatabox", "YSSY", "arrival", datetime(2026, 10, 3).date(), 5)
+    # OpenSky already has YSSY arrivals for 3 Oct: it must not spend credits on them again.
+    warehouse.mark_slot(con, "opensky", "YSSY", "arrival", datetime(2026, 10, 3).date(), 5)
+    # AeroDataBox has EHAM departures for 3 Oct, but OpenSky is preferred: fetch them anyway.
+    warehouse.mark_slot(con, "aerodatabox", "EHAM", "departure", datetime(2026, 10, 3).date(), 5)
     cfg = {"days_back": 1, "backfill_days": 3, "max_backfill_calls_per_run": 1000}
     stats = opensky.ingest(con, ["YSSY", "EHAM"], cfg)
-    # 3 days x 2 airports x 2 directions, less the slot AeroDataBox has.
+    # 3 days x 2 airports x 2 directions, less the slot OpenSky has.
     assert stats["slots"] == 11 and len(_FakeOpenSky.calls) == 11
-    assert ("YSSY", "arrival", int(datetime(2026, 10, 3, tzinfo=timezone.utc).timestamp())) \
-        not in _FakeOpenSky.calls
+    oct3 = int(datetime(2026, 10, 3, tzinfo=timezone.utc).timestamp())
+    assert ("YSSY", "arrival", oct3) not in _FakeOpenSky.calls
+    assert ("EHAM", "departure", oct3) in _FakeOpenSky.calls
     # Newest first: 4 Oct before 3 Oct before 2 Oct.
     assert _FakeOpenSky.calls[0][2] > _FakeOpenSky.calls[-1][2]
 
@@ -414,9 +417,46 @@ def test_aerodatabox_spends_units_only_on_missing_days(con, monkeypatch):
     monkeypatch.setattr(aerodatabox, "AeroDataBoxClient", FakeClient)
     monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
     zones = {"YSSY": "Australia/Sydney", "EHAM": "Europe/Amsterdam"}
+    # OpenSky failed this run, so AeroDataBox fills every day OpenSky has not loaded.
     # Without a configured cap: one new day for both airports (2 calls each), no more.
-    first = aerodatabox.ingest(con, zones, {"backfill_days": 30})
+    first = aerodatabox.ingest(con, zones, {"backfill_days": 30}, opensky_ok=False)
     assert first["days"] == 2 and "budget" in first["stopped_early"]
-    second = aerodatabox.ingest(con, zones, {"backfill_days": 3, "max_backfill_calls_per_run": 100})
+    cfg = {"backfill_days": 3, "max_backfill_calls_per_run": 100}
+    second = aerodatabox.ingest(con, zones, cfg, opensky_ok=False)
     assert second["days"] == 4, "2 Oct and 3 Oct for both airports; 4 Oct is already loaded"
-    assert aerodatabox.ingest(con, zones, {"backfill_days": 3, "max_backfill_calls_per_run": 100})["days"] == 0
+    assert aerodatabox.ingest(con, zones, cfg, opensky_ok=False)["days"] == 0
+
+
+def test_aerodatabox_falls_back_only_where_opensky_has_no_flights(con, monkeypatch):
+    from datetime import datetime, timezone
+
+    class FakeClient:
+        def __init__(self, provider):
+            self.calls = 0
+
+        def fids(self, icao, start, end):
+            self.calls += 1
+            return {}
+
+    monkeypatch.setattr(aerodatabox, "AeroDataBoxClient", FakeClient)
+    monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
+    zones = {"YSSY": "Australia/Sydney", "EHAM": "Europe/Amsterdam"}
+    oct3, oct4 = datetime(2026, 10, 3).date(), datetime(2026, 10, 4).date()
+    for icao in zones:
+        for direction in ("arrival", "departure"):
+            warehouse.mark_slot(con, "opensky", icao, direction, oct4, 300)
+    # OpenSky saw no YSSY arrivals on 3 Oct: a receiver gap, so AeroDataBox fills the day.
+    warehouse.mark_slot(con, "opensky", "YSSY", "arrival", oct3, 0)
+    warehouse.mark_slot(con, "opensky", "YSSY", "departure", oct3, 250)
+    cfg = {"backfill_days": 3, "max_backfill_calls_per_run": 100}
+    # OpenSky working: only YSSY 3 Oct. EHAM 3 Oct and both 2 Oct are left for OpenSky.
+    assert aerodatabox.ingest(con, zones, cfg)["days"] == 1
+    assert aerodatabox.done_days(con, "YSSY") == {oct3}
+    # OpenSky failed: the days it has not loaded too, never the ones it has flights for.
+    assert aerodatabox.ingest(con, zones, cfg, opensky_ok=False)["days"] == 3
+    assert aerodatabox.done_days(con, "EHAM") == {datetime(2026, 10, 2).date(), oct3}
+
+    assert not aerodatabox.needed({"arrival": 1, "departure": 1}, opensky_ok=False)
+    assert aerodatabox.needed({"arrival": 0, "departure": 9}, opensky_ok=True)
+    assert not aerodatabox.needed({}, opensky_ok=True)
+    assert aerodatabox.needed({}, opensky_ok=False)

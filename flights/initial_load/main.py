@@ -5,8 +5,9 @@ warehouse, instead of from a laptop where every write is a round trip:
 
 - weather: `aviation backfill weather`: METARs and TAFs for DAYS (30, all AWC serves;
   more would take older METARs from the IEM archive).
-- flights: `aviation backfill flights`: AeroDataBox (if its key is set) then OpenSky,
-  newest day first, back to each source's backfill_days in config/airports.yml. OpenSky's
+- flights: `aviation backfill flights`: OpenSky, then AeroDataBox (if its key is set) for
+  the days OpenSky missed, newest day first, back to each source's backfill_days in
+  config/airports.yml. OpenSky's
   daily credits allow about a week of all seven airports per run; the hourly flights run
   on GitHub (ingest.yml) fills the rest of the 30 days.
 

@@ -18,12 +18,12 @@ How much does weather and runway availability cost arriving flights at Sydney, M
 | NOTAMs (Hong Kong) | [HK CAD NOTAM website](https://www.notam.ais.gov.hk/), JSON at `/data` | VHHH, VHHK FIR | Free, official, no key | Every 3 h |
 | NOTAMs (US and international) | [FAA NOTAM Search](https://notams.aim.faa.gov/notamSearch/nsapp.html) (the website's backend) | WSSS, EHAM, PANC | Free, no key; unofficial interface | Every 3 h |
 | NOTAMs (AU) | None at present | YSSY, YMML, YBBN | See below | Not ingested |
-| Flights with schedules | [AeroDataBox](https://aerodatabox.com) airport boards (preferred) | All seven | Paid (RapidAPI or API.market key) | Hourly check; last 30 days |
-| Flights (fallback), flight paths | [OpenSky Network REST API](https://openskynetwork.github.io/opensky-api/rest.html) | All seven | Free account, OAuth2 client | Hourly check; last 30 days |
+| Flights (preferred), flight paths | [OpenSky Network REST API](https://openskynetwork.github.io/opensky-api/rest.html) | All seven | Free account, OAuth2 client | Hourly check; last 30 days |
+| Flights with schedules (fallback) | [AeroDataBox](https://aerodatabox.com) airport boards | All seven | Paid (RapidAPI or API.market key) | Hourly check, only for days OpenSky missed; last 30 days |
 
 **Weather.** The [Aviation Weather Center](https://aviationweather.gov/help/data/) is the primary source. Its API serves only the last 30 days, at most 100 requests a minute and 400 results a request. METARs older than that come from the IEM archive (`src/aviation/sources/iem.py`), reshaped into the AWC's JSON (with `"source": "iem"`) so `stg_metar` reads both alike; `stg_metar.source` says which. IEM rows never replace AWC rows, and IEM also stands in for the scheduled METAR fetch if the AWC call fails. Compared on the same reports, the two agree field for field outside the US; for PANC the IEM altimeter can differ by 0.1 hPa. Weather is fetched twice a day, each run covering the last `weather.lookback_hours` (26) so a dropped run leaves no gap. `aviation backfill weather` loads `weather.backfill_days` (30) from AWC; a longer window would take older METARs from IEM. There is no free archive of non-US TAFs.
 
-**Flights.** [AeroDataBox](https://doc.aerodatabox.com) knows the timetable, so `fct_arrivals` and `fct_departures` carry `scheduled_at` and `delay_minutes` for its flights. It is used first; OpenSky covers every (airport, direction, UTC day) slot AeroDataBox has not loaded (`raw.flight_slots` records which source loaded which slot, and `stg_flights` picks per slot). OpenSky remains the only source of flight paths, and tracks are fetched for AeroDataBox flights too, by their Mode-S address. AeroDataBox's airport endpoint is a TIER 2 call covering at most 12 hours, so a day is 14 calls for seven airports (about 420 a month, plus about 420 once to fill 30 days), which the free tier does not cover. Set `AERODATABOX_KEY` and `aerodatabox.provider` (`rapidapi` or `apimarket`) to switch it on; without a key it is skipped. Flights cover the last `backfill_days` (30, `config/airports.yml`). Each run fetches only the (airport, direction, day) slots not yet loaded, newest first, so the hourly run spends OpenSky credits and AeroDataBox units only on gaps; AeroDataBox stays within `max_backfill_calls_per_run`. A day is loaded once it is complete, from 06 UTC the next day (after OpenSky's nightly batch). Each OpenSky airport-day costs 30 of its roughly 4,000 daily credits, so filling 30 days for seven airports takes about four days of runs; after that each new day is 14 calls.
+**Flights.** OpenSky is the preferred source: it is free and the only source of flight paths. [AeroDataBox](https://doc.aerodatabox.com) is the fallback. Each run fetches OpenSky first, then AeroDataBox for the airport-days OpenSky returned no flights for (a gap in its receivers or an outage). If OpenSky fails during a run, AeroDataBox fills every day OpenSky has not loaded. While OpenSky works, days it has not reached yet are left for its later runs, which are free. `stg_flights` uses OpenSky for every (airport, direction, UTC day) slot it has flights for and AeroDataBox for the rest (`raw.flight_slots` records which source loaded which slot and how many flights it returned). OpenSky also fetches slots AeroDataBox loaded earlier and takes them over. AeroDataBox knows the timetable, so `fct_arrivals` and `fct_departures` carry `scheduled_at` and `delay_minutes` for its flights; OpenSky's flights have no schedule. Tracks are fetched for AeroDataBox flights too, by their Mode-S address. AeroDataBox's airport endpoint is a TIER 2 call covering at most 12 hours, so an airport-day is 2 calls. If OpenSky were down for good, all seven airports would take 14 calls a day (about 420 a month, plus about 420 once to fill 30 days), which the free tier does not cover. Set `AERODATABOX_KEY` and `aerodatabox.provider` (`rapidapi` or `apimarket`) to switch it on; without a key it is skipped. Flights cover the last `backfill_days` (30, `config/airports.yml`). Each run fetches only the (airport, direction, day) slots not yet loaded, newest first, so the hourly run spends OpenSky credits and AeroDataBox units only on gaps; AeroDataBox stays within `max_backfill_calls_per_run`. A day is loaded once it is complete, from 06 UTC the next day (after OpenSky's nightly batch). Each OpenSky airport-day costs 30 of its roughly 4,000 daily credits, so filling 30 days for seven airports takes about four days of runs; after that each new day is 14 calls.
 
 FAA NOTAM Search carries US NOTAMs and the international NOTAMs the FAA receives through the ICAO exchange, which is how Singapore and Amsterdam are covered. It is a copy, not the issuing authority (CAAS, LVNL), so spot-check it against the official source before relying on completeness. `src/aviation/sources/notam_faa_search.py` calls the search form's own JSON backend, which is not a published API. Akamai refuses plain HTTP clients there (403 even for the HTML page), so the client uses [curl_cffi](https://github.com/lexiforest/curl_cffi) to present Chrome's TLS fingerprint, loads the page for its cookies, then pages through the results 30 at a time with a pause between requests. That can stop working without notice. It drops the US DoD "V" series NOTAMs (republished foreign procedure changes) and FAA Letters to Airmen. US domestic NOTAMs (`!ANC ...`) have no Q-line, so they get no category and cannot flag a runway closure.
 
@@ -38,8 +38,8 @@ Australia (Airservices NAIPS) publishes live NOTAMs only to registered users. It
 aviationweather.gov ─┐
 IEM (METAR archive) ─┤
 notam.ais.gov.hk ────┼─> ingest (Python) ──> raw.* ──> staging.* ──> marts.* ──┤
-AeroDataBox ─────────┤   idempotent upserts,        views          tables      └─> MotherDuck Dive (dives/)
-OpenSky Network ─────┘
+OpenSky Network ─────┤   idempotent upserts,        views          tables      └─> MotherDuck Dive (dives/)
+AeroDataBox ─────────┘
                          full JSON payload kept
         └── weather + NOTAMs: Flight aviation_pipeline, twice a day; flights: GitHub runner, hourly ──┘
 ```
@@ -66,7 +66,7 @@ OpenSky Network ─────┘
 
 OpenSky observes aircraft; it has no timetables. Without scheduled times, schedule delay cannot be calculated. Terminal-area time is observable from the flight path, responds directly to weather and runway capacity, and is comparable across airports once each airport is benchmarked against its own median.
 
-AeroDataBox supplies that schedule where it is switched on: its flights carry `scheduled_at` and `delay_minutes` in `fct_arrivals` and `fct_departures`. Terminal-area time stays the weather measure, because schedule delay also reflects the departure end, the airline and padding in the timetable.
+AeroDataBox supplies that schedule for the days it fills in for OpenSky: its flights carry `scheduled_at` and `delay_minutes` in `fct_arrivals` and `fct_departures`. Terminal-area time stays the weather measure, because schedule delay also reflects the departure end, the airline and padding in the timetable.
 
 ## 4. Setup
 
@@ -98,9 +98,9 @@ A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs weathe
 | Schedule (UTC) | Where | What |
 |---|---|---|
 | 00:00, 12:00 | Flight `aviation_pipeline` | METAR and TAF (last 26 h), HK and FAA NOTAMs, `dbt build` |
-| Every hour, on the hour | GitHub runner | `aviation backfill flights`: missing days of the last 30 (AeroDataBox if its key is set, then OpenSky), tracks for the newest day, `dbt build` |
+| Every hour, on the hour | GitHub runner | `aviation backfill flights`: missing days of the last 30 (OpenSky, then AeroDataBox for days OpenSky missed if its key is set), tracks for the newest day, `dbt build` |
 
-Flights run on a GitHub runner, not in the Flight. Most hourly runs find every day loaded and only add tracks; a new day is fetched once it is complete (06 UTC). That keeps the slowest step out of the plan's daily Flight minutes (30 on the current plan, which one long run can use up), and OpenSky has timed out from the Flight's servers but not from GitHub's. `SOURCES: 'aerodatabox opensky'` still runs flights in the Flight on demand.
+Flights run on a GitHub runner, not in the Flight. Most hourly runs find every day loaded and only add tracks; a new day is fetched once it is complete (06 UTC). That keeps the slowest step out of the plan's daily Flight minutes (30 on the current plan, which one long run can use up), and OpenSky has timed out from the Flight's servers but not from GitHub's. `SOURCES: 'opensky aerodatabox'` still runs flights in the Flight on demand.
 
 The source is `flights/aviation_pipeline/main.py`. OpenSky credentials come from a Flight secret named `opensky`, FAA NOTAM API credentials (for the unused `faa` fallback) from an optional one named `faa`, and the AeroDataBox key from an optional one named `aerodatabox`; the deploy creates them from the GitHub secrets (`AERODATABOX_KEY` for the last). To run it now, or with other sources:
 
@@ -111,11 +111,11 @@ select * from md_list_flight_runs(flight_id := '<id>') order by run_number desc 
 select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
 ```
 
-`SOURCES` takes space-separated sources (`metar taf notam-hk notam-faa-search aerodatabox opensky`), or `none` for dbt only.
+`SOURCES` takes space-separated sources (`metar taf notam-hk notam-faa-search opensky aerodatabox`), or `none` for dbt only. Run on its own, `aerodatabox` fills only the days OpenSky returned empty.
 
 ### Flight: `initial_load`
 
-The history load runs as its own Flight, `flights/initial_load/main.py`, inside MotherDuck: from a laptop every write is a round trip to MotherDuck, which made the load take hours. It is published with the pipeline but never scheduled. It runs `aviation backfill weather` (30 days of METARs and TAFs), then `aviation backfill flights` (the missing days of the last 30: AeroDataBox if its key is set, then OpenSky with as many calls as the day's credits allow), then `dbt build`. A Flight run is capped at an hour, so the work can be split with config, and every step is safe to re-run:
+The history load runs as its own Flight, `flights/initial_load/main.py`, inside MotherDuck: from a laptop every write is a round trip to MotherDuck, which made the load take hours. It is published with the pipeline but never scheduled. It runs `aviation backfill weather` (30 days of METARs and TAFs), then `aviation backfill flights` (the missing days of the last 30: OpenSky with as many calls as the day's credits allow, then AeroDataBox for the days OpenSky missed if its key is set), then `dbt build`. A Flight run is capped at an hour, so the work can be split with config, and every step is safe to re-run:
 
 ```bash
 python scripts/run_flight.py --flight initial_load --timeout-minutes 60                          # everything
@@ -123,7 +123,7 @@ python scripts/run_flight.py --flight initial_load --config STEPS=weather --time
 python scripts/run_flight.py --flight initial_load --config STEPS=flights                        # another day's OpenSky credits
 ```
 
-Config: `STEPS` (`weather`, `flights`), `DAYS` (weather history), `OPENSKY_CALLS` (default 1000; the credit floor stops it first), `AERODATABOX_CALLS` (paid units; default from config) and `DBT` (`false` to skip). On the free plan only one Flight runs at a time, so start it between the twice-daily runs. OpenSky allows about a week of all seven airports a day, so the hourly flights run on GitHub fills the rest of the 30 days. The same loads run on a GitHub runner, using no Flight minutes, from the `ingest` workflow with source `backfill-weather` or `backfill-flights` and `runner: github`. `scripts/deploy_motherduck.py --only flight --flight initial_load` publishes just this Flight (for example from a branch) without repointing the scheduled pipeline.
+Config: `STEPS` (`weather`, `flights`), `DAYS` (weather history), `OPENSKY_CALLS` (default 1000; the credit floor stops it first), `AERODATABOX_CALLS` (paid units for the fallback; default from config) and `DBT` (`false` to skip). On the free plan only one Flight runs at a time, so start it between the twice-daily runs. OpenSky allows about a week of all seven airports a day, so the hourly flights run on GitHub fills the rest of the 30 days. The same loads run on a GitHub runner, using no Flight minutes, from the `ingest` workflow with source `backfill-weather` or `backfill-flights` and `runner: github`. `scripts/deploy_motherduck.py --only flight --flight initial_load` publishes just this Flight (for example from a branch) without repointing the scheduled pipeline.
 
 From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `runner: github` runs ingest and dbt on the GitHub runner instead of the Flight, as a fallback if the Flight is unavailable.
 

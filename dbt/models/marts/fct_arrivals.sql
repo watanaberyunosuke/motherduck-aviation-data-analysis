@@ -1,5 +1,5 @@
 -- Every arrival at an in-scope airport, from any origin, with the weather when it landed.
--- From AeroDataBox where loaded (with the schedule, so delay is measured), else OpenSky.
+-- From OpenSky where it has the slot, else AeroDataBox (with the schedule, so delay is measured).
 -- Delay is null where there is no schedule (OpenSky) or no actual time yet. Terminal-area metrics are attached only where a well-covered
 -- track exists (fct_arrival_weather_impact); most arrivals have none, because the
 -- /tracks quota covers only a fraction of the day's flights.
