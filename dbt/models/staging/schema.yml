@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: stg_flights
+    description: >
+      One row per flight from the preferred source for its (airport, direction, UTC day)
+      slot: AeroDataBox where it has loaded that slot, else OpenSky.
+    columns:
+      - name: flight_id
+        tests: [not_null, unique]
+      - name: source
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['aerodatabox', 'opensky']
+
+  - name: stg_aerodatabox_flights
+    description: One row per AeroDataBox flight, both boards merged, including cancellations.
+    columns:
+      - name: flight_id
+        tests: [not_null, unique]

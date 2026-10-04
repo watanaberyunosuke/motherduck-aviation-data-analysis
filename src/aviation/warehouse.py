@@ -7,7 +7,8 @@ same keys rather than duplicating them.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import tempfile
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import duckdb
@@ -88,6 +89,36 @@ create table if not exists raw.opensky_tracks (
     primary key (icao24, start_time)
 );
 
+-- AeroDataBox airport departures/arrivals (FIDS). One row per flight per airport board, so
+-- a flight between two in-scope airports appears on both; staging merges them by
+-- flight_id. The epochs are parsed at load so the OpenSky track selection can use them.
+create table if not exists raw.aerodatabox_flights (
+    airport_icao    varchar not null,  -- the board it came from
+    direction       varchar not null,  -- arrival | departure
+    flight_id       varchar not null,  -- number (or callsign, reg) @ scheduled departure UTC
+    icao24          varchar,           -- Mode-S hex, lower case
+    callsign        varchar,
+    departure_epoch bigint,            -- runway, else revised, else scheduled (unix seconds)
+    arrival_epoch   bigint,
+    status          varchar,
+    fetched_at      timestamptz not null,
+    payload         json not null,
+    primary key (airport_icao, direction, flight_id)
+);
+
+-- Which (source, airport, direction, UTC day) flight slots have been fetched, including
+-- those that returned nothing. Backfills skip done slots, and staging prefers AeroDataBox
+-- for any slot it has loaded.
+create table if not exists raw.flight_slots (
+    source      varchar not null,  -- aerodatabox | opensky
+    icao        varchar not null,
+    direction   varchar not null,  -- arrival | departure
+    day_utc     date    not null,
+    rows        integer not null,
+    fetched_at  timestamptz not null,
+    primary key (source, icao, direction, day_utc)
+);
+
 create table if not exists raw.ingest_log (
     run_at     timestamptz not null,
     source     varchar not null,
@@ -109,22 +140,57 @@ def connect(target: str) -> duckdb.DuckDBPyConnection:
     return con
 
 
+# Above this many rows, upsert loads through a temporary file in one statement instead of
+# one insert per row, which is far too slow against MotherDuck for a backfill.
+BULK_THRESHOLD = 50
+
+
 def upsert(con: duckdb.DuckDBPyConnection, table: str, rows: list[dict], key: list[str],
-           keep_on_conflict: tuple[str, ...] = ()) -> int:
-    """Insert rows; on key conflict overwrite every column except `keep_on_conflict`."""
+           keep_on_conflict: tuple[str, ...] = (), overwrite: bool = True) -> int:
+    """Insert rows; on key conflict overwrite every column except `keep_on_conflict`.
+
+    With overwrite=False, rows whose key already exists are left alone: a lower-priority
+    source (a backfill archive) fills gaps without replacing the primary source's rows.
+    """
     if not rows:
         return 0
     cols = list(rows[0].keys())
-    placeholders = ", ".join("?" for _ in cols)
     updates = ", ".join(
         f"{c} = excluded.{c}" for c in cols if c not in key and c not in keep_on_conflict
     )
-    sql = (
-        f"insert into {table} ({', '.join(cols)}) values ({placeholders}) "
-        f"on conflict ({', '.join(key)}) do update set {updates}"
-    )
-    con.executemany(sql, [[_to_db(r[c]) for c in cols] for r in rows])
+    action = f"do update set {updates}" if overwrite and updates else "do nothing"
+    conflict = f"on conflict ({', '.join(key)}) {action}"
+    if len(rows) <= BULK_THRESHOLD:
+        placeholders = ", ".join("?" for _ in cols)
+        con.executemany(f"insert into {table} ({', '.join(cols)}) values ({placeholders}) {conflict}",
+                        [[_to_db(r[c]) for c in cols] for r in rows])
+        return len(rows)
+
+    types = dict(con.execute(f"select column_name, column_type from (describe {table})").fetchall())
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "rows.ndjson"
+        with path.open("w") as f:
+            for r in rows:
+                f.write(json.dumps({c: _to_json(r[c]) for c in cols}) + "\n")
+        # JSON payloads travel as strings and are cast back, so they keep their exact text.
+        spec = ", ".join(f"'{c}': '{'VARCHAR' if types[c] == 'JSON' else types[c]}'" for c in cols)
+        select = ", ".join(f"cast({c} as json)" if types[c] == "JSON" else c for c in cols)
+        # A key repeated within one batch would make the insert fail, so keep one copy.
+        con.execute(f"""
+            insert into {table} ({', '.join(cols)})
+            select {select} from read_json('{path}', format = 'newline_delimited', columns = {{{spec}}})
+            qualify row_number() over (partition by {', '.join(key)} order by 1) = 1
+            {conflict}
+        """)
     return len(rows)
+
+
+def mark_slot(con: duckdb.DuckDBPyConnection, source: str, icao: str, direction: str,
+              day: date, rows: int) -> None:
+    upsert(con, "raw.flight_slots", [{
+        "source": source, "icao": icao, "direction": direction, "day_utc": day,
+        "rows": rows, "fetched_at": utcnow(),
+    }], ["source", "icao", "direction", "day_utc"])
 
 
 def log_run(con: duckdb.DuckDBPyConnection, source: str, rows: int, detail: str = "") -> None:
@@ -134,4 +200,12 @@ def log_run(con: duckdb.DuckDBPyConnection, source: str, rows: int, detail: str 
 def _to_db(value):
     if isinstance(value, (dict, list)):
         return json.dumps(value)
+    return value
+
+
+def _to_json(value):
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
     return value

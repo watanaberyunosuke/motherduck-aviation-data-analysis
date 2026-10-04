@@ -26,7 +26,7 @@ deploy = _load("deploy_motherduck", ROOT / "scripts" / "deploy_motherduck.py")
     (1, ["metar", "taf"]),
     (3, ["metar", "taf", "notam-hk", "notam-faa-search"]),
     (0, ["metar", "taf", "notam-hk", "notam-faa-search"]),
-    (6, ["metar", "taf", "notam-hk", "notam-faa-search", "opensky"]),
+    (6, ["metar", "taf", "notam-hk", "notam-faa-search", "aerodatabox", "opensky"]),
     (7, ["metar", "taf"]),
 ])
 def test_hourly_plan_matches_old_ingest_schedule(hour, expected):

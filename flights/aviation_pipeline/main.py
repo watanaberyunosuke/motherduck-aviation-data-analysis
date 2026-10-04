@@ -12,8 +12,11 @@ change which code runs.
 Config (Flight config, overridable per run with MD_RUN_FLIGHT(config := MAP {...})):
     WAREHOUSE  dbt / ingest target, e.g. md:aviation
     SOURCES    space-separated sources to run instead of this hour's plan,
-               e.g. 'opensky' or 'metar taf notam-hk notam-faa-search opensky'. 'none' runs dbt only.
+               e.g. 'opensky' or 'metar taf notam-hk notam-faa-search aerodatabox opensky'.
+               'none' runs dbt only.
 Secret `opensky` (TYPE flights): OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET.
+Secret `aerodatabox` (TYPE flights, optional): AERODATABOX_KEY. Without it the AeroDataBox
+step is skipped and OpenSky covers all flights.
 Secret `faa` (TYPE flights, optional): FAA_CLIENT_ID, FAA_CLIENT_SECRET, for the FAA NOTAM
 API fallback (notam-faa). Unused while no airport has notam_source: faa.
 MOTHERDUCK_TOKEN is injected by the Flight runtime.
@@ -40,7 +43,9 @@ def sources_for_hour(hour: int) -> list[str]:
     if hour % 3 == 0:
         sources += ["notam-hk", "notam-faa-search"]
     if hour == 6:
-        sources.append("opensky")  # flights + tracks for yesterday; slowest, so last
+        # Yesterday's flights, then older days within each source's budget. AeroDataBox
+        # first, so OpenSky's backfill skips its slots; OpenSky is slowest, so last.
+        sources += ["aerodatabox", "opensky"]
     return sources
 
 

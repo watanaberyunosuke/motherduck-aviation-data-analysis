@@ -34,10 +34,37 @@ airports:
     name: Anchorage Ted Stevens
     notam_source: faa_search
 
+# Flights: AeroDataBox first (it has schedules), OpenSky for every (airport, direction,
+# UTC day) AeroDataBox has not loaded. Both backfill older days a little each daily run,
+# newest first, back to `backfill_days`; OpenSky alone also supplies flight paths.
+aerodatabox:
+  # Marketplace the AERODATABOX_KEY belongs to: rapidapi | apimarket. Without a key the
+  # source is skipped and OpenSky covers everything.
+  provider: rapidapi
+  days_back: 1
+  # Plans reach back about a year at most; do not set this beyond the plan's history.
+  backfill_days: 365
+  # Each call is a TIER 2 call (2 units on RapidAPI) covering 12 h; a full day for all
+  # seven airports is 14 calls. The daily fetch alone is about 420 calls a month, so set
+  # this to what is left of the plan's monthly units / 2 / 30.
+  max_backfill_calls_per_run: 40
+
+weather:
+  # METAR history loaded by `aviation backfill weather`: the Aviation Weather Center for
+  # the last 30 days (all it serves), the IEM archive before that. TAFs: 30 days only.
+  backfill_days: 1095
+
 opensky:
   # Flights endpoints are batch-processed overnight by OpenSky, so pull whole UTC days
   # that have already finished. 1 = yesterday.
   days_back: 1
+  # Older days to backfill, newest first, skipping slots AeroDataBox has. Each
+  # airport-day costs 30 flights credits of about 4,000 a day, so a year for seven
+  # airports takes about seven weeks of daily runs.
+  backfill_days: 365
+  # Backfill calls per run, about what the daily credits leave after yesterday's 14 calls,
+  # so the Flight run stays short.
+  max_backfill_calls_per_run: 110
   # Track only flights arriving at an airport in the list above, from any origin. Those
   # are the arrivals the terminal-time baseline is built for.
   track_arrivals_only: true

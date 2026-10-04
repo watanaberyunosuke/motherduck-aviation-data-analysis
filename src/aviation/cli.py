@@ -1,6 +1,8 @@
 """Command line entry point.
 
-    aviation ingest metar | taf | notam | notam-hk | notam-faa-search | notam-faa | notam-rapidapi | opensky | all
+    aviation ingest metar | taf | notam | notam-hk | notam-faa-search | notam-faa | notam-rapidapi
+                    | aerodatabox | opensky | all
+    aviation backfill weather [--days N]
 """
 from __future__ import annotations
 
@@ -12,11 +14,11 @@ import sys
 from aviation import warehouse
 from aviation.config import load_settings
 from aviation.sources import (
-    aviationweather, notam_faa, notam_faa_search, notam_hk, notam_rapidapi, opensky,
+    aerodatabox, aviationweather, notam_faa, notam_faa_search, notam_hk, notam_rapidapi, opensky,
 )
 
 
-def run(source: str) -> int:
+def run(source: str, days: int | None = None) -> int:
     settings = load_settings()
     con = warehouse.connect(settings.warehouse)
     failures = 0
@@ -52,8 +54,21 @@ def run(source: str) -> int:
             attempt("notam faa", lambda: notam_faa.ingest(con, faa))
     if source in ("notam", "notam-rapidapi", "all") and rapid:
         attempt("notam rapidapi", lambda: notam_rapidapi.ingest(con, rapid))
+    # AeroDataBox before OpenSky, so OpenSky's backfill skips the slots it loaded and its
+    # track selection sees its flights.
+    if source in ("aerodatabox", "all"):
+        missing = [k for k in aerodatabox.CREDENTIALS if not os.environ.get(k, "").strip()]
+        if missing:
+            print(f"aerodatabox: skipped - {' / '.join(missing)} not set; OpenSky covers flights")
+        else:
+            attempt("aerodatabox",
+                    lambda: aerodatabox.ingest(con, settings.timezones, settings.aerodatabox))
     if source in ("opensky", "all"):
         attempt("opensky", lambda: opensky.ingest(con, settings.icao_codes, settings.opensky))
+    if source == "backfill-weather":
+        days = days or int(settings.weather.get("backfill_days", 30))
+        attempt("weather backfill",
+                lambda: aviationweather.backfill(con, settings.icao_codes, days))
 
     con.close()
     return 1 if failures else 0
@@ -65,8 +80,14 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     ingest = sub.add_parser("ingest", help="pull a source into the raw schema")
     ingest.add_argument("source", choices=["metar", "taf", "notam", "notam-hk", "notam-faa-search",
-                                           "notam-faa", "notam-rapidapi", "opensky", "all"])
+                                           "notam-faa", "notam-rapidapi", "aerodatabox",
+                                           "opensky", "all"])
+    backfill = sub.add_parser("backfill", help="load history (flights backfill within ingest)")
+    backfill.add_argument("what", choices=["weather"])
+    backfill.add_argument("--days", type=int, help="default: weather.backfill_days in config")
     args = parser.parse_args(argv)
+    if args.command == "backfill":
+        sys.exit(run(f"backfill-{args.what}", args.days))
     sys.exit(run(args.source))
 
 

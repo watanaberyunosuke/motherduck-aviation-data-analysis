@@ -1,6 +1,7 @@
 """Settings loaded from config/airports.yml and environment variables."""
 from __future__ import annotations
 
+import csv
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,6 +10,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = REPO_ROOT / "config" / "airports.yml"
+AIRPORTS_SEED = REPO_ROOT / "dbt" / "seeds" / "airports.csv"
 
 
 def _load_dotenv(path: Path) -> None:
@@ -37,11 +39,21 @@ class Airport:
 class Settings:
     airports: list[Airport]
     opensky: dict = field(default_factory=dict)
+    aerodatabox: dict = field(default_factory=dict)
+    weather: dict = field(default_factory=dict)
     rapidapi: dict = field(default_factory=dict)
 
     @property
     def icao_codes(self) -> list[str]:
         return [a.icao for a in self.airports]
+
+    @property
+    def timezones(self) -> dict[str, str]:
+        """ICAO -> IANA time zone, from the airports seed (which holds the coordinates and
+        zones for dbt), for the airports in scope."""
+        with AIRPORTS_SEED.open() as f:
+            zones = {row["icao"]: row["timezone"] for row in csv.DictReader(f)}
+        return {icao: zones[icao] for icao in self.icao_codes}
 
     def airports_for_notam_source(self, source: str) -> list[str]:
         return [a.icao for a in self.airports if a.notam_source == source]
@@ -61,6 +73,8 @@ def load_settings(path: Path = CONFIG_PATH) -> Settings:
     return Settings(
         airports=[Airport(**a) for a in raw["airports"]],
         opensky=raw.get("opensky", {}),
+        aerodatabox=raw.get("aerodatabox", {}),
+        weather=raw.get("weather", {}),
         rapidapi=raw.get("rapidapi", {}),
     )
 

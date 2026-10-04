@@ -5,13 +5,14 @@ name: ingest
 # schedules Flights on a Business plan, so this cron starts each run with md_run_flight
 # (scripts/run_flight.py) and waits for it; a failed Flight run fails this workflow.
 # The Flight picks this hour's sources itself (METAR + TAF hourly, HK and FAA NOTAM Search
-# NOTAMs every 3 h, OpenSky at 06 UTC) and then runs dbt build.
+# NOTAMs every 3 h, AeroDataBox and OpenSky flights at 06 UTC) and then runs dbt build.
 #
 # Manual runs can pick sources, and `runner: github` runs ingest + dbt on the GitHub
 # runner instead, as a fallback if the Flight is unavailable.
 # Required repository secrets: MOTHERDUCK_TOKEN (and OPENSKY_CLIENT_ID /
-# OPENSKY_CLIENT_SECRET, and optionally FAA_CLIENT_ID / FAA_CLIENT_SECRET, for the github
-# runner; the Flight uses its own `opensky` and `faa` secrets).
+# OPENSKY_CLIENT_SECRET, and optionally FAA_CLIENT_ID / FAA_CLIENT_SECRET and
+# AERODATABOX_KEY, for the github runner; the Flight uses its own `opensky`, `faa` and
+# `aerodatabox` secrets).
 on:
   schedule:
     - cron: "7 * * * *"  # UTC, off the hour (GitHub delays jobs queued at :00)
@@ -20,7 +21,7 @@ on:
       source:
         description: "Sources to ingest (hourly = this hour's Flight plan)"
         type: choice
-        options: [hourly, metar, taf, notam-hk, notam-faa-search, opensky, all, none]
+        options: [hourly, metar, taf, notam-hk, notam-faa-search, aerodatabox, opensky, all, none]
         default: hourly
       runner:
         description: "Where to run"
@@ -57,7 +58,7 @@ jobs:
         run: |
           case "$SOURCE" in
             hourly) sources="" ;;
-            all)    sources="metar taf notam-hk notam-faa-search opensky" ;;
+            all)    sources="metar taf notam-hk notam-faa-search aerodatabox opensky" ;;
             *)      sources="$SOURCE" ;;
           esac
           uv run python scripts/run_flight.py --sources "$sources"
@@ -71,6 +72,7 @@ jobs:
       OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
       FAA_CLIENT_ID: ${{ secrets.FAA_CLIENT_ID }}
       FAA_CLIENT_SECRET: ${{ secrets.FAA_CLIENT_SECRET }}
+      AERODATABOX_KEY: ${{ secrets.AERODATABOX_KEY }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
@@ -88,7 +90,7 @@ jobs:
             # Same plan as the Flight's sources_for_hour.
             h=$(date -u +%-H); SOURCE="metar taf"
             [ $((h % 3)) -eq 0 ] && SOURCE="$SOURCE notam-hk notam-faa-search"
-            [ "$h" -eq 6 ] && SOURCE="$SOURCE opensky"
+            [ "$h" -eq 6 ] && SOURCE="$SOURCE aerodatabox opensky"
           fi
           status=0
           for s in $SOURCE; do

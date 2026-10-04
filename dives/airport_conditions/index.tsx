@@ -453,7 +453,7 @@ const num: CSSProperties = { ...td, textAlign: "right", fontVariantNumeric: "tab
 export default function AirportConditions() {
   // Airports, busiest first.
   const airportsQ = useSQLQuery(`
-    select a.icao, a.iata, a.name, a.timezone, a.notam_source, count(f.icao24) as arrivals
+    select a.icao, a.iata, a.name, a.timezone, a.notam_source, count(f.flight_id) as arrivals
     from "aviation"."reference"."airports" a
     left join "aviation"."marts"."fct_arrivals" f
       on f.arrival_icao = a.icao and f.arrived_at >= now() - interval 30 day
