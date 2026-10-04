@@ -12,7 +12,7 @@ Endpoint: GET /flights/airports/icao/{icao}/{fromLocal}/{toLocal} ("FIDS", TIER 
 call returns both directions for at most 12 hours of local time on most plans, so a UTC
 day costs two calls per airport. withLeg=true adds the other end of each flight (origin
 for arrivals, destination for departures). How far back it reaches depends on the plan
-(about a year at most); `backfill_days` in config/airports.yml should not exceed it.
+(about a year at most); `backfill_days` in config/airports.yml (30) is well inside it.
 
 Credentials: AERODATABOX_KEY, the key of whichever marketplace `provider` names. Without
 it the source is skipped and every slot falls back to OpenSky.
@@ -181,31 +181,28 @@ def done_days(con: duckdb.DuckDBPyConnection, icao: str) -> set[date]:
 
 
 def ingest(con: duckdb.DuckDBPyConnection, timezones: dict[str, str], cfg: dict) -> dict:
-    """Yesterday (UTC) for every airport, then older days newest first, back to
-    `backfill_days`, until `max_backfill_calls_per_run` is spent."""
+    """Every airport-day not yet loaded, from the newest complete UTC day back to
+    `backfill_days`, newest first, within `max_backfill_calls_per_run` calls. Loaded days
+    are skipped, so the hourly run spends paid units only on gaps (a new day is 14 calls)."""
     client = AeroDataBoxClient(cfg.get("provider", "rapidapi"))
     today = warehouse.utcnow().date()
-    days_back = int(cfg.get("days_back", 1))
-    backfill_days = int(cfg.get("backfill_days", 0))
-    budget = int(cfg.get("max_backfill_calls_per_run", 0))
-    stats = {"flights": 0, "days": 0, "backfill_days": 0, "stopped_early": ""}
+    newest = warehouse.newest_complete_day(int(cfg.get("days_back", 1)))
+    oldest = max(newest, int(cfg.get("backfill_days", newest)))
+    # Units are paid: without a configured cap, one new day's calls.
+    budget = int(cfg.get("max_backfill_calls_per_run") or 2 * len(timezones))
+    stats = {"flights": 0, "days": 0, "stopped_early": ""}
     try:
-        for icao, tz in timezones.items():
-            stats["flights"] += ingest_day(con, client, icao, ZoneInfo(tz),
-                                           today - timedelta(days=days_back))
-            stats["days"] += 1
-        daily_calls = client.calls
-        # Backfill round-robin by day, so every airport advances together.
+        # Round-robin by day, so every airport advances together.
         done = {icao: done_days(con, icao) for icao in timezones}
-        for back in range(days_back + 1, backfill_days + 1):
+        for back in range(newest, oldest + 1):
             day = today - timedelta(days=back)
             for icao, tz in timezones.items():
                 if day in done[icao]:
                     continue
-                if client.calls - daily_calls + len(windows(day, ZoneInfo(tz))) > budget:
-                    raise QuotaExhausted(f"backfill budget of {budget} calls spent")
+                if client.calls + len(windows(day, ZoneInfo(tz))) > budget:
+                    raise QuotaExhausted(f"budget of {budget} calls spent")
                 stats["flights"] += ingest_day(con, client, icao, ZoneInfo(tz), day)
-                stats["backfill_days"] += 1
+                stats["days"] += 1
     except QuotaExhausted as exc:
         stats["stopped_early"] = str(exc)
         log.info("AeroDataBox stopped: %s", exc)

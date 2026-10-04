@@ -1,18 +1,19 @@
 name: ingest
 
-# Hourly trigger for the MotherDuck Flight `aviation_pipeline`
+# Twice-daily trigger (00:07 and 12:07 UTC) for the MotherDuck Flight `aviation_pipeline`
 # (flights/aviation_pipeline/main.py, deployed by the ci.yml deploy job). MotherDuck only
 # schedules Flights on a Business plan, so this cron starts each run with md_run_flight
 # (scripts/run_flight.py) and waits for it; a failed Flight run fails this workflow.
-# The Flight picks this hour's sources itself (METAR + TAF hourly, HK and FAA NOTAM Search
-# NOTAMs every 3 h) and then runs dbt build.
+# Each run loads METARs and TAFs for the last weather.lookback_hours (26, so a dropped
+# run leaves no gap) and HK and FAA NOTAM Search NOTAMs, then runs dbt build.
 #
-# Flights run once a day at 06:17 UTC on the GitHub runner, not in the Flight:
-# `aviation backfill flights` loads yesterday (AeroDataBox if its key is set, then OpenSky),
-# tracks, and then older days with whatever OpenSky credits are left, then dbt build.
-# That keeps the slowest step out of the plan's daily Flight minutes, and OpenSky has
-# timed out from the Flight's servers but not from GitHub's. 06 UTC is after OpenSky's
-# nightly batch has published yesterday's flights.
+# Flights run every hour at :17 on the GitHub runner, not in the Flight: `aviation
+# backfill flights` fetches each (airport, direction, UTC day) of the last 30 days not yet
+# loaded (AeroDataBox if its key is set, then OpenSky), newest first, plus tracks for the
+# newest day, then dbt build. Loaded days are skipped, so most runs only add tracks; a
+# new day is loaded once it is complete (06 UTC, after OpenSky's nightly batch). This
+# keeps the slowest step out of the plan's daily Flight minutes, and OpenSky has timed
+# out from the Flight's servers but not from GitHub's.
 #
 # Manual runs can pick sources, and `runner: github` runs ingest + dbt on the GitHub
 # runner instead, as a fallback if the Flight is unavailable (or the plan's daily Flight
@@ -24,16 +25,16 @@ name: ingest
 # `aerodatabox` secrets).
 on:
   schedule:
-    - cron: "7 * * * *"   # UTC, off the hour (GitHub delays jobs queued at :00): the Flight
-    - cron: "17 6 * * *"  # daily flights on the GitHub runner (see above)
+    - cron: "7 */12 * * *"  # UTC, off the hour (GitHub delays jobs queued at :00): the Flight
+    - cron: "17 * * * *"    # hourly flights on the GitHub runner (see above)
   workflow_dispatch:
     inputs:
       source:
-        description: "Sources to ingest (hourly = this hour's Flight plan)"
+        description: "Sources to ingest (scheduled = the Flight's plan: weather + NOTAMs)"
         type: choice
-        options: [hourly, metar, taf, notam-hk, notam-faa-search, aerodatabox, opensky, all, none,
+        options: [scheduled, metar, taf, notam-hk, notam-faa-search, aerodatabox, opensky, all, none,
                   backfill-weather, backfill-flights]
-        default: hourly
+        default: scheduled
       runner:
         description: "Where to run"
         type: choice
@@ -53,7 +54,7 @@ env:
 jobs:
   flight:
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '7 * * * *')
+      (github.event_name == 'schedule' && github.event.schedule == '7 */12 * * *')
       || (github.event_name == 'workflow_dispatch' && inputs.runner == 'flight')
     runs-on: ubuntu-latest
     timeout-minutes: ${{ startsWith(inputs.source, 'backfill-') && 65 || 30 }}
@@ -67,14 +68,14 @@ jobs:
 
       - name: Run Flight and wait
         env:
-          SOURCE: ${{ inputs.source || 'hourly' }}
+          SOURCE: ${{ inputs.source || 'scheduled' }}
         run: |
           case "$SOURCE" in
             backfill-*)
               uv run python scripts/run_flight.py --flight initial_load \
                 --config "STEPS=${SOURCE#backfill-}" --timeout-minutes 60
               exit ;;
-            hourly) sources="" ;;
+            scheduled) sources="" ;;
             all)    sources="metar taf notam-hk notam-faa-search aerodatabox opensky" ;;
             *)      sources="$SOURCE" ;;
           esac
@@ -82,7 +83,7 @@ jobs:
 
   github:
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '17 6 * * *')
+      (github.event_name == 'schedule' && github.event.schedule == '17 * * * *')
       || (github.event_name == 'workflow_dispatch' && inputs.runner == 'github')
     runs-on: ubuntu-latest
     timeout-minutes: ${{ (github.event_name == 'schedule' || startsWith(inputs.source, 'backfill-')) && 60 || 30 }}
@@ -103,14 +104,11 @@ jobs:
       - name: Ingest
         if: inputs.source != 'none'
         env:
-          # The daily schedule has no inputs: it is the flights load.
+          # The hourly flights schedule has no inputs.
           SOURCE: ${{ github.event_name == 'schedule' && 'backfill-flights' || inputs.source }}
         run: |
-          if [ "$SOURCE" = hourly ]; then
-            # Same plan as the Flight's sources_for_hour.
-            h=$(date -u +%-H); SOURCE="metar taf"
-            [ $((h % 3)) -eq 0 ] && SOURCE="$SOURCE notam-hk notam-faa-search"
-          fi
+          # Same plan as the Flight's PLAN.
+          [ "$SOURCE" = scheduled ] && SOURCE="metar taf notam-hk notam-faa-search"
           case "$SOURCE" in
             # As the initial_load Flight: OpenSky gets the day's credits (the floor stops it).
             backfill-weather) exec uv run aviation backfill weather ;;

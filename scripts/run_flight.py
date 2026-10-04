@@ -3,13 +3,13 @@
     python scripts/run_flight.py [--sources "metar taf"] [--timeout-minutes 25]
     python scripts/run_flight.py --flight initial_load [--config STEPS=weather ...]
 
-The hourly trigger for the Flight, called by .github/workflows/ingest.yml. MotherDuck only
+The scheduled trigger for the Flight, called by .github/workflows/ingest.yml. MotherDuck only
 schedules Flights on a Business plan, so GitHub's cron starts each run instead. Waiting for
 the run (rather than fire-and-forget) means a failed Flight fails the workflow, and the
 warehouse-writer concurrency group covers the Flight as well as the deploy job.
 
---sources is passed as the Flight's SOURCES config; empty lets the Flight pick this hour's
-plan (flights/aviation_pipeline/main.py), 'none' runs dbt only. --config KEY=VALUE sets any
+--sources is passed as the Flight's SOURCES config; empty runs the Flight's PLAN
+(flights/aviation_pipeline/main.py), 'none' runs dbt only. --config KEY=VALUE sets any
 other config for the run (repeatable), e.g. initial_load's STEPS or DAYS.
 """
 from __future__ import annotations

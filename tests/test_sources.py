@@ -239,7 +239,9 @@ class _FakeResponse:
 
 
 def test_opensky_run_log_counts_http_statuses(con, monkeypatch):
-    in_scope = {"est_departure_airport": "YSSY", "est_arrival_airport": "YMML"}
+    from datetime import datetime, timezone
+    # After 06 UTC, so yesterday is the newest complete day.
+    monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
     begin, end = opensky.day_window(1)
     flights = [{"icao24": f"a{i}", "firstSeen": begin + i * 100, "lastSeen": begin + i * 100 + 50,
                 "estDepartureAirport": "YSSY", "estArrivalAirport": "YMML"} for i in range(3)]
@@ -338,3 +340,83 @@ def test_iem_report_types_follow_the_stations_routine_minutes():
     valid = [f"2023-10-05 {h:02d}:{m}" for h in range(6) for m in ("00", "30")] + ["2023-10-05 04:47"]
     types = iem.metar_types([{"valid": v} for v in valid])
     assert types[:-1] == ["METAR"] * 12 and types[-1] == "SPECI"
+
+
+def test_weather_lookback_covers_the_gap_between_runs(con, monkeypatch):
+    from datetime import timedelta
+    windows, taf_times = [], []
+    monkeypatch.setattr(aviationweather.time, "sleep", lambda _: None)
+    monkeypatch.setattr(aviationweather, "fetch_metar",
+                        lambda icaos, hours, end=None: windows.append((end - timedelta(hours=hours), end)) or [])
+    monkeypatch.setattr(aviationweather, "fetch_taf",
+                        lambda icaos, at=None: taf_times.append(at) or [])
+    aviationweather.ingest_metar(con, ["EHAM"], 26)
+    aviationweather.ingest_taf(con, ["EHAM"], 26)
+    # 6-hour chunks back from now, contiguous, 26 hours in all.
+    assert all(b[0] == a[1] for a, b in zip(windows[1:], windows))
+    assert windows[0][1] - windows[-1][0] == timedelta(hours=26)
+    assert max(b - a for a, b in windows) <= timedelta(hours=6)
+    # The current TAFs, then the ones current at each of the last 26 hours.
+    assert taf_times[0] is None and len(taf_times) == 27
+
+
+def test_a_day_counts_as_complete_from_06_utc():
+    from datetime import datetime, timezone
+    assert warehouse.newest_complete_day(1, datetime(2026, 10, 5, 5, 59, tzinfo=timezone.utc)) == 2
+    assert warehouse.newest_complete_day(1, datetime(2026, 10, 5, 6, 0, tzinfo=timezone.utc)) == 1
+
+
+class _FakeOpenSky:
+    calls: list = []
+
+    def __init__(self, min_credits_remaining=200):
+        self.credits_remaining, self.statuses = {}, {}
+
+    def flights(self, direction, airport, begin, end):
+        _FakeOpenSky.calls.append((airport, direction, begin))
+        return []
+
+    def track(self, icao24, at):
+        return None
+
+
+def test_opensky_fetches_only_missing_slots(con, monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(opensky, "OpenSkyClient", _FakeOpenSky)
+    monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
+    _FakeOpenSky.calls = []
+    # AeroDataBox already has YSSY arrivals for 3 Oct: OpenSky must not spend credits on it.
+    warehouse.mark_slot(con, "aerodatabox", "YSSY", "arrival", datetime(2026, 10, 3).date(), 5)
+    cfg = {"days_back": 1, "backfill_days": 3, "max_backfill_calls_per_run": 1000}
+    stats = opensky.ingest(con, ["YSSY", "EHAM"], cfg)
+    # 3 days x 2 airports x 2 directions, less the slot AeroDataBox has.
+    assert stats["slots"] == 11 and len(_FakeOpenSky.calls) == 11
+    assert ("YSSY", "arrival", int(datetime(2026, 10, 3, tzinfo=timezone.utc).timestamp())) \
+        not in _FakeOpenSky.calls
+    # Newest first: 4 Oct before 3 Oct before 2 Oct.
+    assert _FakeOpenSky.calls[0][2] > _FakeOpenSky.calls[-1][2]
+
+    _FakeOpenSky.calls = []
+    assert opensky.ingest(con, ["YSSY", "EHAM"], cfg)["slots"] == 0, "the next hourly run has nothing to fetch"
+
+
+def test_aerodatabox_spends_units_only_on_missing_days(con, monkeypatch):
+    from datetime import datetime, timezone
+
+    class FakeClient:
+        def __init__(self, provider):
+            self.calls = 0
+
+        def fids(self, icao, start, end):
+            self.calls += 1
+            return {}
+
+    monkeypatch.setattr(aerodatabox, "AeroDataBoxClient", FakeClient)
+    monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
+    zones = {"YSSY": "Australia/Sydney", "EHAM": "Europe/Amsterdam"}
+    # Without a configured cap: one new day for both airports (2 calls each), no more.
+    first = aerodatabox.ingest(con, zones, {"backfill_days": 30})
+    assert first["days"] == 2 and "budget" in first["stopped_early"]
+    second = aerodatabox.ingest(con, zones, {"backfill_days": 3, "max_backfill_calls_per_run": 100})
+    assert second["days"] == 4, "2 Oct and 3 Oct for both airports; 4 Oct is already loaded"
+    assert aerodatabox.ingest(con, zones, {"backfill_days": 3, "max_backfill_calls_per_run": 100})["days"] == 0

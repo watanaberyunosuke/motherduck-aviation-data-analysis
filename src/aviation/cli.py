@@ -36,10 +36,12 @@ def run(source: str, days: int | None = None, opensky_calls: int | None = None,
             failures += 1
             print(f"{name}: FAILED - {exc}", file=sys.stderr)
 
+    # Weather is fetched twice a day, so each run covers the gap since the last one.
+    lookback = int(settings.weather.get("lookback_hours", 26))
     if source in ("metar", "all"):
-        attempt("metar", lambda: aviationweather.ingest_metar(con, settings.icao_codes))
+        attempt("metar", lambda: aviationweather.ingest_metar(con, settings.icao_codes, lookback))
     if source in ("taf", "all"):
-        attempt("taf", lambda: aviationweather.ingest_taf(con, settings.icao_codes))
+        attempt("taf", lambda: aviationweather.ingest_taf(con, settings.icao_codes, lookback))
     hk = settings.airports_for_notam_source("hk_cad")
     faa_search = settings.airports_for_notam_source("faa_search")
     faa = settings.airports_for_notam_source("faa")

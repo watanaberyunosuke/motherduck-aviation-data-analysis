@@ -185,6 +185,18 @@ def upsert(con: duckdb.DuckDBPyConnection, table: str, rows: list[dict], key: li
     return len(rows)
 
 
+# OpenSky publishes a UTC day's flights in a nightly batch, and late arrivals land in the
+# early hours, so a day only counts as complete from this hour (UTC) the next day.
+DAY_READY_HOUR_UTC = 6
+
+
+def newest_complete_day(days_back: int = 1, now: datetime | None = None) -> int:
+    """Days back to the newest flights day that can be loaded for good: `days_back`
+    (1 = yesterday) once it is DAY_READY_HOUR_UTC, else one more."""
+    now = now or utcnow()
+    return days_back if now.hour >= DAY_READY_HOUR_UTC else days_back + 1
+
+
 def mark_slot(con: duckdb.DuckDBPyConnection, source: str, icao: str, direction: str,
               day: date, rows: int) -> None:
     upsert(con, "raw.flight_slots", [{

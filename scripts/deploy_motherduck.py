@@ -12,7 +12,7 @@ later runs update them (each update is a new version in MotherDuck).
 - Flight `initial_load` (flights/initial_load): the one-off history load, pinned the same
   way and only ever run on demand (scripts/run_flight.py --flight initial_load).
   --flight NAME publishes just the named Flight(s), e.g. to try initial_load from a branch
-  without repointing the hourly pipeline.
+  without repointing the scheduled pipeline.
 - Flight secret `opensky`: (re)created from OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET when
   both are set, otherwise it must already exist.
 - Flight secret `faa` (optional): the same from FAA_CLIENT_ID / FAA_CLIENT_SECRET. When it

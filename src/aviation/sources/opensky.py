@@ -21,9 +21,9 @@ Australian and Asian airports, particularly at low altitude on approach.
 
 AeroDataBox (sources/aerodatabox.py) is the preferred flights source, because it has
 schedules; OpenSky is the fallback for slots AeroDataBox has not loaded, and the only
-source of flight paths. Flights history reaches back years, but each airport-day costs 30
-of the roughly 4,000 daily flights credits, so older days are backfilled a few at a time
-with whatever credits each daily run leaves (`backfill_days`, newest first).
+source of flight paths. Each airport-day costs 30 of the roughly 4,000 daily flights
+credits, so filling the `backfill_days` window (30 days) takes a few days of hourly runs;
+after that each day's run loads just the new day.
 """
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class OpenSkyClient:
 
 def day_window(days_back: int, now: datetime | None = None) -> tuple[int, int]:
     """[00:00, 24:00) UTC of the day `days_back` days ago."""
-    now = now or datetime.now(timezone.utc)
+    now = now or warehouse.utcnow()
     day = (now - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
     return int(day.timestamp()), int((day + timedelta(days=1)).timestamp())
 
@@ -186,17 +186,40 @@ def ingest_slot(con: duckdb.DuckDBPyConnection, client: OpenSkyClient, icao: str
 
 
 def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], cfg: dict) -> dict:
-    """Yesterday's flights and tracks, then older days' flights with the credits left."""
+    """Every (airport, direction) day not yet loaded by either source, from the newest
+    complete day back to `backfill_days`, newest first, then tracks for the newest day.
+
+    Loaded slots are skipped, so the hourly run spends credits only on gaps: a new day
+    once a day, older days until the window is full, and more tracks while the tracks
+    quota lasts. Flights and tracks have separate quotas, so one running out does not
+    stop the other.
+    """
     client = OpenSkyClient(min_credits_remaining=int(cfg.get("min_credits_remaining", 200)))
-    days_back = int(cfg.get("days_back", 1))
-    begin, end = day_window(days_back)
-    stats = {"flights": 0, "tracks": 0, "backfill_slots": 0, "stopped_early": ""}
+    newest = warehouse.newest_complete_day(int(cfg.get("days_back", 1)))
+    oldest = max(newest, int(cfg.get("backfill_days", newest)))
+    # No cap unless configured: the credit floor is what stops a run.
+    budget = int(cfg.get("max_backfill_calls_per_run") or 10**6)
+    stats = {"flights": 0, "tracks": 0, "slots": 0, "stopped_early": ""}
 
     try:
-        for icao in icaos:
-            for direction in ("arrival", "departure"):
-                stats["flights"] += ingest_slot(con, client, icao, direction, begin)
+        done = done_slots(con)
+        try:
+            for back in range(newest, oldest + 1):
+                day_begin, _ = day_window(back)
+                day = datetime.fromtimestamp(day_begin, timezone.utc).date()
+                for icao in icaos:
+                    for direction in ("arrival", "departure"):
+                        if (icao, direction, day) in done:
+                            continue
+                        if stats["slots"] >= budget:
+                            raise CreditsExhausted(f"budget of {budget} calls spent")
+                        stats["flights"] += ingest_slot(con, client, icao, direction, day_begin)
+                        stats["slots"] += 1
+        except CreditsExhausted as exc:
+            stats["stopped_early"] = f"flights: {exc}; "
+            log.warning("OpenSky flights stopped: %s", exc)
 
+        begin, end = day_window(newest)
         todo = select_flights_to_track(con, icaos, begin, end,
                                        bool(cfg.get("track_arrivals_only", True)),
                                        int(cfg.get("max_tracks_per_run", 100)))
@@ -209,35 +232,13 @@ def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], cfg: dict) -> dict:
                     stats["tracks"] += warehouse.upsert(con, "raw.opensky_tracks", [track_row(t)],
                                                         ["icao24", "start_time"])
         except CreditsExhausted as exc:
-            # Tracks have their own quota: running out must not stop the flights backfill.
-            stats["stopped_early"] = f"tracks: {exc}; "
-            log.warning("OpenSky tracks stopped early: %s", exc)
-
-        # Backfill: older days newest first, skipping slots either source already has.
-        # The flights quota is separate from the tracks quota, so this cannot starve them.
-        budget = int(cfg.get("max_backfill_calls_per_run", 0))
-        done = done_slots(con)
-        calls = 0
-        for back in range(days_back + 1, int(cfg.get("backfill_days", 0)) + 1):
-            day_begin, _ = day_window(back)
-            day = datetime.fromtimestamp(day_begin, timezone.utc).date()
-            for icao in icaos:
-                for direction in ("arrival", "departure"):
-                    if (icao, direction, day) in done:
-                        continue
-                    if calls >= budget:
-                        raise CreditsExhausted(f"backfill budget of {budget} calls spent")
-                    stats["flights"] += ingest_slot(con, client, icao, direction, day_begin)
-                    stats["backfill_slots"] += 1
-                    calls += 1
-    except CreditsExhausted as exc:
-        stats["stopped_early"] += str(exc)
-        log.warning("OpenSky stopped early: %s", exc)
+            stats["stopped_early"] += f"tracks: {exc}"
+            log.warning("OpenSky tracks stopped: %s", exc)
     except requests.HTTPError as exc:
-        stats["stopped_early"] = f"HTTP error: {exc}"
+        stats["stopped_early"] += f"HTTP error: {exc}"
         raise
     except Exception as exc:  # network errors, warehouse errors: still say what stopped it
-        stats["stopped_early"] = f"{type(exc).__name__}: {exc}"
+        stats["stopped_early"] += f"{type(exc).__name__}: {exc}"
         raise
     finally:
         warehouse.log_run(con, "opensky", stats["flights"] + stats["tracks"],

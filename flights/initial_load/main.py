@@ -3,12 +3,12 @@
 Run on demand (never scheduled) to load history inside MotherDuck, close to the
 warehouse, instead of from a laptop where every write is a round trip:
 
-- weather: `aviation backfill weather`: METARs for DAYS (AWC for the last 30, the IEM
-  archive before that) and 30 days of TAFs.
+- weather: `aviation backfill weather`: METARs and TAFs for DAYS (30, all AWC serves;
+  more would take older METARs from the IEM archive).
 - flights: `aviation backfill flights`: AeroDataBox (if its key is set) then OpenSky,
   newest day first, back to each source's backfill_days in config/airports.yml. OpenSky's
-  daily credits allow about a week of all seven airports per run; re-run on later days,
-  or let the daily flights run on GitHub (ingest.yml) finish the year.
+  daily credits allow about a week of all seven airports per run; the hourly flights run
+  on GitHub (ingest.yml) fills the rest of the 30 days.
 
 Then `dbt build`. Every step is idempotent, so a run that stops part-way (a Flight run
 is capped at an hour) can simply be run again.
@@ -18,7 +18,7 @@ Like aviation_pipeline, each run downloads a pinned commit of this repo from Git
 Config (per run with MD_RUN_FLIGHT(config := MAP {...})):
     WAREHOUSE          target, e.g. md:aviation
     STEPS              space-separated: weather flights (default both)
-    DAYS               weather history in days (default: weather.backfill_days, 3 years)
+    DAYS               weather history in days (default: weather.backfill_days, 30)
     OPENSKY_CALLS      OpenSky backfill calls this run (default 1000; the credit floor
                        stops it first)
     AERODATABOX_CALLS  AeroDataBox backfill calls this run (paid units; default from

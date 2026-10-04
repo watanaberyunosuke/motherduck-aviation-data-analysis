@@ -22,20 +22,13 @@ flight = _load("flight_main", ROOT / "flights" / "aviation_pipeline" / "main.py"
 deploy = _load("deploy_motherduck", ROOT / "scripts" / "deploy_motherduck.py")
 
 
-@pytest.mark.parametrize("hour, expected", [
-    (1, ["metar", "taf"]),
-    (3, ["metar", "taf", "notam-hk", "notam-faa-search"]),
-    (0, ["metar", "taf", "notam-hk", "notam-faa-search"]),
-    (6, ["metar", "taf", "notam-hk", "notam-faa-search"]),
-    (7, ["metar", "taf"]),
-])
-def test_hourly_plan_matches_old_ingest_schedule(hour, expected):
-    assert flight.pick_sources("", hour) == expected
+def test_scheduled_plan_is_weather_and_notams():
+    assert flight.pick_sources("") == ["metar", "taf", "notam-hk", "notam-faa-search"]
 
 
 def test_sources_override():
-    assert flight.pick_sources(" opensky ", 1) == ["opensky"]
-    assert flight.pick_sources("none", 6) == []
+    assert flight.pick_sources(" opensky ") == ["opensky"]
+    assert flight.pick_sources("none") == []
 
 
 def test_every_source_in_plan_is_a_cli_source():
@@ -44,9 +37,8 @@ def test_every_source_in_plan_is_a_cli_source():
     import aviation.cli as cli
 
     cli_choices = inspect.getsource(cli.main)
-    for hour in range(24):
-        for source in flight.sources_for_hour(hour):
-            assert f'"{source}"' in cli_choices
+    for source in flight.PLAN:
+        assert f'"{source}"' in cli_choices
 
 
 @pytest.mark.parametrize("value", [

@@ -3,7 +3,9 @@
 Docs: https://aviationweather.gov/data/api/  (free, no key, global ICAO coverage)
 
 Limits from the docs: at most 100 requests a minute, at most 400 results a request, and
-`date` reaches back 30 days only. Older METARs come from the IEM archive (sources/iem.py),
+`date` reaches back 30 days only. The scheduled run is twice a day, so each fetch looks
+back `weather.lookback_hours` (config/airports.yml) in chunks rather than taking only the
+latest reports. Older METARs come from the IEM archive (sources/iem.py),
 which also stands in for the hourly fetch when AWC fails. There is no free archive of
 non-US TAFs, so TAFs go back 30 days at most.
 """
@@ -70,9 +72,26 @@ def taf_rows(payload: list[dict]) -> list[dict]:
     ]
 
 
-def ingest_metar(con: duckdb.DuckDBPyConnection, icaos: list[str], hours: int = 3) -> int | str:
+def _metar_chunks(icaos: list[str], end: datetime, hours: float, chunk_hours: int = 6) -> list[dict]:
+    """Every METAR in the `hours` before `end`, fetched in chunks small enough to stay under
+    the 400-result cap (seven airports at up to four reports an hour)."""
+    rows, at = [], end
+    while at > end - timedelta(hours=hours):
+        span = min(chunk_hours, (at - (end - timedelta(hours=hours))).total_seconds() / 3600)
+        chunk = metar_rows(fetch_metar(icaos, span, at))
+        if len(chunk) >= 400:
+            log.warning("AWC METAR chunk ending %s hit the 400-result cap", at)
+        rows += chunk
+        at -= timedelta(hours=chunk_hours)
+        if at > end - timedelta(hours=hours):
+            time.sleep(REQUEST_PAUSE_S)
+    return rows
+
+
+def ingest_metar(con: duckdb.DuckDBPyConnection, icaos: list[str], hours: float = 26) -> int | str:
+    """METARs for the last `hours`, re-fetching any already stored (they are keyed)."""
     try:
-        rows = metar_rows(fetch_metar(icaos, hours))
+        rows = _metar_chunks(icaos, warehouse.utcnow() + timedelta(minutes=1), hours)
     except Exception as exc:
         # AWC down or refusing: take the same window from IEM, which never overwrites.
         log.warning("AWC METAR failed (%s); falling back to IEM", exc)
@@ -84,8 +103,15 @@ def ingest_metar(con: duckdb.DuckDBPyConnection, icaos: list[str], hours: int = 
     return n
 
 
-def ingest_taf(con: duckdb.DuckDBPyConnection, icaos: list[str]) -> int:
-    n = warehouse.upsert(con, "raw.taf", taf_rows(fetch_taf(icaos)), ["icao", "issue_time"])
+def ingest_taf(con: duckdb.DuckDBPyConnection, icaos: list[str], hours: int = 26) -> int:
+    """The current TAFs plus those current at each hour of the last `hours`, so TAFs issued
+    and replaced between two runs are kept."""
+    now = warehouse.utcnow().replace(second=0, microsecond=0)
+    rows = taf_rows(fetch_taf(icaos))
+    for back in range(1, hours + 1):
+        time.sleep(REQUEST_PAUSE_S)
+        rows += taf_rows(fetch_taf(icaos, now - timedelta(hours=back)))
+    n = warehouse.upsert(con, "raw.taf", rows, ["icao", "issue_time"])
     warehouse.log_run(con, "taf", n)
     return n
 
@@ -95,16 +121,9 @@ def backfill_metar(con: duckdb.DuckDBPyConnection, icaos: list[str], days: int =
     """The last `days` (at most 30) of METARs from AWC, in chunks small enough to stay
     under its 400-result cap (7 airports at up to 4 reports an hour)."""
     end = warehouse.utcnow().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    start = end - timedelta(days=min(days, HISTORY_DAYS)) + timedelta(hours=1)
-    n = 0
-    at = end
-    while at > start:
-        rows = metar_rows(fetch_metar(icaos, chunk_hours, at))
-        if len(rows) >= 400:
-            log.warning("AWC METAR chunk ending %s hit the 400-result cap", at)
-        n += warehouse.upsert(con, "raw.metar", rows, ["icao", "obs_time"])
-        at -= timedelta(hours=chunk_hours)
-        time.sleep(REQUEST_PAUSE_S)
+    hours = min(days, HISTORY_DAYS) * 24 - 1
+    rows = _metar_chunks(icaos, end, hours, chunk_hours)
+    n = warehouse.upsert(con, "raw.metar", rows, ["icao", "obs_time"])
     warehouse.log_run(con, "metar_backfill", n, detail=f"awc {days} days")
     return n
 
