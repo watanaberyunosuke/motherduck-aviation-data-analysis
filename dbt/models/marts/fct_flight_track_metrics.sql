@@ -78,7 +78,8 @@ per_track as (
         arg_min(km_from_departure, point_at)                       as first_point_km_from_departure,
         arg_min(km_to_arrival, point_at)                           as first_point_km_from_arrival,
         arg_max(km_to_arrival, point_at)                           as last_point_km_from_arrival,
-        min(point_at) filter (where km_to_arrival <= {{ terminal_km }}) as terminal_entry_at
+        min(point_at) filter (where km_to_arrival <= {{ terminal_km }}) as terminal_entry_at,
+        min(point_at) filter (where km_from_departure > {{ terminal_km }}) as departure_exit_at
     from segments
     group by 1, 2
 )
@@ -112,7 +113,13 @@ select
     -- Terminal time only needs the arrival end: seen outside the terminal area before
     -- entering it, and close to the runway at the end. The departure can be anywhere.
     coalesce(pt.first_point_km_from_arrival > {{ terminal_km }}
-             and pt.last_point_km_from_arrival <= 30, false)               as has_arrival_coverage
+             and pt.last_point_km_from_arrival <= 30, false)               as has_arrival_coverage,
+    -- The departure mirror: from first airborne point to the first point outside the
+    -- departure airport's terminal area (climb-out, departure procedure, vectors).
+    pt.departure_exit_at,
+    date_diff('second', pt.first_airborne_at, pt.departure_exit_at) / 60.0 as departure_terminal_minutes,
+    coalesce(pt.first_point_km_from_departure <= 30
+             and pt.departure_exit_at is not null, false)                  as has_departure_coverage
 from tracks tr
 join per_track pt using (icao24, track_start_epoch)
 left join {{ ref('airport_codes') }} dep on dep.icao = tr.departure_icao

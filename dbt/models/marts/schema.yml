@@ -102,3 +102,41 @@ models:
       - dbt_utils_free_unique_combination:
           arguments:
             columns: [icao24, first_seen_epoch]
+
+  - name: fct_departures
+    description: >
+      Every observed departure from an in-scope airport, to any destination, with the METAR
+      flight category at take-off and, where a well-covered track exists, time to leave
+      the departure terminal area against the airport's rolling 30-day median.
+    columns:
+      - name: departure_iata
+        tests: [not_null]
+      - name: departure_terminal_minutes
+        description: First airborne point to first point outside the terminal radius. Null without a well-covered track.
+      - name: excess_departure_minutes
+        description: departure_terminal_minutes minus the airport's rolling median (excluding the flight itself).
+    tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [icao24, first_seen_epoch]
+
+  - name: fct_airport_conditions
+    description: One row per in-scope airport with its time zone and the latest METAR, TAF and NOTAM count.
+    columns:
+      - name: icao
+        tests: [not_null, unique]
+      - name: timezone
+        tests: [not_null]
+      - name: notams_in_force
+        description: Null where the airport has no NOTAM feed (unknown, not zero).
+
+  - name: fct_terminal_tracks
+    description: >
+      Track points within map_radius_km of an in-scope airport, one per 30 s per track, for
+      the arrival end of flights landing there and the departure end of flights leaving it.
+    columns:
+      - name: role
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['arrival', 'departure']
