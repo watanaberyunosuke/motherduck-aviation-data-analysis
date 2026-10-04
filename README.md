@@ -7,7 +7,7 @@ How much does weather and runway availability cost arriving flights at Sydney, M
 - Measures **excess terminal-area time**, the minutes an arrival spends within 50 NM of its destination beyond that airport's rolling median. This is the weather-sensitive part of a flight: holding, vectoring and go-arounds.
 - Scheduled by a [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) and visualised in a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/). The same Dive is also served on Vercel, running in the browser on DuckDB-WASM.
 - Shows airports and flights with IATA codes (SYD, QF627). The warehouse stores the ICAO forms OpenSky reports (YSSY, QFA627) alongside.
-- Modelled on [colin-k-rogers/formula-1-data-analysis](https://github.com/colin-k-rogers/formula-1-data-analysis): scheduled ingest, then dbt, then dashboard.
+- Inspired by [colin-k-rogers/formula-1-data-analysis](https://github.com/colin-k-rogers/formula-1-data-analysis): scheduled ingest, then dbt, then dashboard.
 
 ## 1. Data sources
 
