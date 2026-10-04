@@ -43,7 +43,11 @@ function loadTables(db: duckdb.AsyncDuckDB, sql: string): Promise<void[]> {
     if (!loaded.has(name)) {
       const load = (async () => {
         const res = await fetch(`/api/tables/${name}`);
-        if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+        if (!res.ok) {
+          // api/index.py explains itself in FastAPI's {"detail": ...} body.
+          const detail = await res.json().then((b) => b?.detail, () => undefined);
+          throw new Error(detail ?? `${name}: HTTP ${res.status}`);
+        }
         const file = `${name}.parquet`;
         await db.registerFileBuffer(file, new Uint8Array(await res.arrayBuffer()));
         const [schema, table] = name.split(".");

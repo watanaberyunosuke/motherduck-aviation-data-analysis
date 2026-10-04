@@ -108,7 +108,7 @@ The Dive queries `md:aviation` directly, so viewers need access to that database
 
 The Vercel site is the same Dive, for viewers without MotherDuck access. `web/` bundles `dives/airport_conditions/index.tsx` unchanged with Vite and swaps its `@motherduck/react-sql-query` import for `web/src/dive-runtime.ts`, which runs the same SQL in the browser on [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview). The WASM build is served from the deployment; DuckDB's ICU extension is fetched from DuckDB's extension CDN on first load.
 
-The MotherDuck token never reaches the browser. The page fetches each table its SQL names from `api/index.py` (`/api/tables/<schema>.<table>`), which exports it from MotherDuck as Parquet, trimmed to the last 31 days where the Dive needs no more, and Vercel's edge caches it for 10 minutes. Only the tables in its allow-list can be fetched. Each export must stay under Vercel's 4.5 MB response limit; `fct_arrivals` is about 30 KB per 1,000 rows.
+The MotherDuck token never reaches the browser. The page fetches each table its SQL names from `api/index.py` (`/api/tables/<schema>.<table>`), which exports it from MotherDuck as Parquet, trimmed to the last 31 days where the Dive needs no more, and Vercel's edge caches it for 10 minutes (browsers revalidate on every load). Only the tables in its allow-list can be fetched. Each export must stay under Vercel's 4.5 MB response limit; `fct_arrivals` is about 30 KB per 1,000 rows.
 
 Vercel builds from `vercel.json`: `npm run build` in `web/` for the static site, and `api/index.py` as a Python function with its own `api/requirements.txt` (duckdb, fastapi). The project needs `MOTHERDUCK_TOKEN` set in its environment variables. To run it locally against the local warehouse:
 

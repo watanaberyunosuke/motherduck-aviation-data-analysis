@@ -218,8 +218,9 @@ export default function AirportConditions() {
   const name = airport?.name;
   const arrivals = rowsOf(arrivalsQ.data);
 
-  return (
-    <div style={{ fontFamily: SANS, color: INK, padding: 24, maxWidth: 1100 }}>
+  const page: CSSProperties = { fontFamily: SANS, color: INK, padding: 24, maxWidth: 1100 };
+  const intro = (
+    <>
       <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
       <p style={{ fontSize: 13, color: MUTED, margin: "4px 0 0" }}>
         Weather, observed traffic and excess terminal-area time (minutes within 50 NM beyond the
@@ -262,6 +263,29 @@ export default function AirportConditions() {
           </table>
         )}
       </Section>
+    </>
+  );
+
+  // Every per-airport section waits for the airport list, so without it they would sit on
+  // skeletons forever. Say why instead.
+  if (airportsQ.isError || (!airportsQ.isLoading && airports.length === 0)) {
+    return (
+      <div style={page}>
+        {intro}
+        <Section title="Airport detail">
+          <Empty>
+            {airportsQ.isError
+              ? `Could not load the airport list: ${String(airportsQ.error?.message ?? airportsQ.error)}`
+              : "No airports in reference.airports. Run dbt seed."}
+          </Empty>
+        </Section>
+      </div>
+    );
+  }
+
+  return (
+    <div style={page}>
+      {intro}
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 40 }}>
         <select
