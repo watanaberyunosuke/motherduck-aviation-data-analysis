@@ -39,7 +39,9 @@ models:
             columns: [source, notam_key]
 
   - name: fct_daily_airport_movements
-    description: Observed ADS-B arrivals and departures per airport per day.
+    description: >
+      Arrivals and departures per airport per UTC day: AeroDataBox boards (cancellations
+      excluded) where loaded, otherwise OpenSky's observed ADS-B movements.
     columns:
       - name: iata
         tests: [not_null]
@@ -86,10 +88,24 @@ models:
 
   - name: fct_arrivals
     description: >
-      Every observed arrival at an in-scope airport, from any origin, with the latest
-      METAR flight category. Terminal metrics only where fct_arrival_weather_impact has
-      the flight.
+      Every arrival at an in-scope airport, from any origin, with the latest METAR flight
+      category: from AeroDataBox (with schedule) where loaded, else OpenSky. Terminal
+      metrics only where fct_arrival_weather_impact has the flight.
     columns:
+      - name: flight_id
+        description: Source-specific key. AeroDataBox number@scheduled departure; OpenSky icao24@first seen.
+        tests: [not_null, unique]
+      - name: source
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['aerodatabox', 'opensky']
+      - name: scheduled_at
+        description: Scheduled arrival (AeroDataBox only).
+      - name: delay_minutes
+        description: >
+          arrived_at minus scheduled_at. Null for OpenSky (no schedule) and where
+          AeroDataBox has no actual time (arrival_time_is_scheduled).
       - name: callsign
         description: ICAO form as broadcast, e.g. QFA627.
       - name: flight_number_iata
@@ -100,10 +116,6 @@ models:
         tests: [not_null]
       - name: flight_category
         description: Null when no METAR within metar_max_age_minutes before arrival.
-    tests:
-      - dbt_utils_free_unique_combination:
-          arguments:
-            columns: [icao24, first_seen_epoch]
 
   - name: fct_departures
     description: >
@@ -111,16 +123,18 @@ models:
       flight category at take-off and, where a well-covered track exists, time to leave
       the departure terminal area against the airport's rolling 30-day median.
     columns:
+      - name: flight_id
+        tests: [not_null, unique]
+      - name: delay_minutes
+        description: >
+          departed_at minus scheduled_at. Null for OpenSky (no schedule) and where
+          AeroDataBox has no actual time (departure_time_is_scheduled).
       - name: departure_iata
         tests: [not_null]
       - name: departure_terminal_minutes
         description: First airborne point to first point outside the terminal radius. Null without a well-covered track.
       - name: excess_departure_minutes
         description: departure_terminal_minutes minus the airport's rolling median (excluding the flight itself).
-    tests:
-      - dbt_utils_free_unique_combination:
-          arguments:
-            columns: [icao24, first_seen_epoch]
 
   - name: fct_airport_conditions
     description: One row per in-scope airport with its time zone and the latest METAR, TAF and NOTAM count.

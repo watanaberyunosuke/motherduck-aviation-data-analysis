@@ -16,6 +16,8 @@ clouds as (
 select
     icao,
     to_timestamp(obs_time)                                        as observed_at,
+    -- awc (Aviation Weather Center) or iem (archive, for history beyond AWC's 30 days).
+    coalesce(payload ->> 'source', 'awc')                         as source,
     payload ->> 'metarType'                                       as report_type,
     payload ->> 'rawOb'                                           as raw_text,
     try_cast(payload ->> 'temp' as double)                        as temp_c,

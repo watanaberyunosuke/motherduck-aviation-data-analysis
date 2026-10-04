@@ -1,6 +1,6 @@
 """Publish the MotherDuck Flight and Dive from this checkout.
 
-    python scripts/deploy_motherduck.py [--sha SHA] [--only flight|dive ...]
+    python scripts/deploy_motherduck.py [--sha SHA] [--only flight|dive ...] [--flight NAME ...]
 
 Runs in the ci.yml deploy job on every push to main; can also be run locally with
 MOTHERDUCK_TOKEN set. Both objects are matched by name, so the first run creates them and
@@ -9,10 +9,16 @@ later runs update them (each update is a new version in MotherDuck).
 - Flight `aviation_pipeline` (flights/aviation_pipeline): ingest + dbt build, pinned to
   --sha. The commit must already be on GitHub, because the Flight downloads it. Published
   unscheduled; scripts/run_flight.py starts it hourly from GitHub Actions.
+- Flight `initial_load` (flights/initial_load): the one-off history load, pinned the same
+  way and only ever run on demand (scripts/run_flight.py --flight initial_load).
+  --flight NAME publishes just the named Flight(s), e.g. to try initial_load from a branch
+  without repointing the scheduled pipeline.
 - Flight secret `opensky`: (re)created from OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET when
   both are set, otherwise it must already exist.
 - Flight secret `faa` (optional): the same from FAA_CLIENT_ID / FAA_CLIENT_SECRET. When it
   neither can be created nor exists, the Flight is published without it and skips FAA NOTAMs.
+- Flight secret `aerodatabox` (optional): from AERODATABOX_KEY. Without it the Flight skips
+  AeroDataBox and OpenSky covers all flights.
 - Dive "Airport conditions" (dives/airport_conditions).
 """
 from __future__ import annotations
@@ -32,14 +38,22 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = "watanaberyunosuke/motherduck-aviation-data-analysis"
 DATABASE = "aviation"
 
-FLIGHT_NAME = "aviation_pipeline"
-FLIGHT_DIR = ROOT / "flights" / FLIGHT_NAME
-# No schedule_cron: MotherDuck only schedules Flights on a Business plan, so the hourly
-# trigger is the cron in .github/workflows/ingest.yml (scripts/run_flight.py).
+FLIGHT_NAME = "aviation_pipeline"  # the scheduled one; scripts/run_flight.py's default
+# No schedule_cron: MotherDuck only schedules Flights on paid plans (this account is on the
+# free plan), so the trigger is the cron in .github/workflows/ingest.yml
+# (scripts/run_flight.py).
 # name -> (environment variables it holds, whether the Flight needs it to run at all)
 FLIGHT_SECRETS = {
     "opensky": (("OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET"), True),
     "faa": (("FAA_CLIENT_ID", "FAA_CLIENT_SECRET"), False),
+    "aerodatabox": (("AERODATABOX_KEY",), False),
+}
+
+# Flight name -> its default config. Each lives in flights/<name>/ (main.py, requirements.txt).
+FLIGHTS = {
+    FLIGHT_NAME: {"WAREHOUSE": f"md:{DATABASE}", "SOURCES": ""},
+    "initial_load": {"WAREHOUSE": f"md:{DATABASE}", "STEPS": "", "DAYS": "", "OPENSKY_CALLS": "",
+                     "AERODATABOX_CALLS": "", "DBT": "true"},
 }
 
 DIVE_DIR = ROOT / "dives" / "airport_conditions"
@@ -85,31 +99,38 @@ def ensure_flight_secret(con: duckdb.DuckDBPyConnection, name: str, keys: tuple[
     return False
 
 
-def deploy_flight(con: duckdb.DuckDBPyConnection, sha: str) -> None:
-    secrets = [name for name, (keys, required) in FLIGHT_SECRETS.items()
-               if ensure_flight_secret(con, name, keys, required)]
-    source = ((FLIGHT_DIR / "main.py").read_text()
+def deploy_flight(con: duckdb.DuckDBPyConnection, sha: str, name: str,
+                  secrets: list[str]) -> None:
+    flight_dir = ROOT / "flights" / name
+    source = ((flight_dir / "main.py").read_text()
               .replace("__REPO__", REPO).replace("__GIT_SHA__", sha))
     args = {
         "source_code": sql_str(source),
-        "requirements_txt": sql_str((FLIGHT_DIR / "requirements.txt").read_text()),
-        "config": sql_map({"WAREHOUSE": f"md:{DATABASE}", "SOURCES": ""}),
+        "requirements_txt": sql_str((flight_dir / "requirements.txt").read_text()),
+        "config": sql_map(FLIGHTS[name]),
         "flight_secret_names": sql_list(secrets),
     }
     named = ", ".join(f"{k} := {v}" for k, v in args.items())
     ids = [r[0] for r in con.execute(
-        "select flight_id from md_list_flights() where flight_name = ?", [FLIGHT_NAME]
+        "select flight_id from md_list_flights() where flight_name = ?", [name]
     ).fetchall()]
     if len(ids) > 1:
-        raise SystemExit(f"{len(ids)} Flights are named {FLIGHT_NAME!r}; delete the extras.")
+        raise SystemExit(f"{len(ids)} Flights are named {name!r}; delete the extras.")
     if ids:
         con.execute(f"call md_update_flight(flight_id := {sql_str(str(ids[0]))}, {named})")
-        print(f"flight {FLIGHT_NAME}: updated {ids[0]} to {sha[:7]}")
+        print(f"flight {name}: updated {ids[0]} to {sha[:7]}")
     else:
         flight_id = con.execute(
-            f"select flight_id from md_create_flight(name := {sql_str(FLIGHT_NAME)}, {named})"
+            f"select flight_id from md_create_flight(name := {sql_str(name)}, {named})"
         ).fetchone()[0]
-        print(f"flight {FLIGHT_NAME}: created {flight_id} at {sha[:7]}")
+        print(f"flight {name}: created {flight_id} at {sha[:7]}")
+
+
+def deploy_flights(con: duckdb.DuckDBPyConnection, sha: str, names: list[str]) -> None:
+    secrets = [name for name, (keys, required) in FLIGHT_SECRETS.items()
+               if ensure_flight_secret(con, name, keys, required)]
+    for name in names:
+        deploy_flight(con, sha, name, secrets)
 
 
 def deploy_dive(con: duckdb.DuckDBPyConnection, sha: str) -> None:
@@ -142,10 +163,13 @@ def main() -> None:
     parser.add_argument("--sha", help="commit the Flight runs (default: HEAD)")
     parser.add_argument("--only", choices=["flight", "dive"], action="append",
                         help="publish only this; repeatable (default: both)")
+    parser.add_argument("--flight", choices=list(FLIGHTS), action="append",
+                        help="with flights: publish only this Flight; repeatable (default: all)")
     args = parser.parse_args()
 
     sha = git("rev-parse", args.sha or "HEAD")
-    steps = {"flight": deploy_flight, "dive": deploy_dive}
+    flights = args.flight or list(FLIGHTS)
+    steps = {"flight": lambda con, sha: deploy_flights(con, sha, flights), "dive": deploy_dive}
     targets = args.only or list(steps)
     if "flight" in targets and not os.environ.get("GITHUB_ACTIONS"):
         if not git("branch", "-r", "--contains", sha):

@@ -22,20 +22,13 @@ flight = _load("flight_main", ROOT / "flights" / "aviation_pipeline" / "main.py"
 deploy = _load("deploy_motherduck", ROOT / "scripts" / "deploy_motherduck.py")
 
 
-@pytest.mark.parametrize("hour, expected", [
-    (1, ["metar", "taf"]),
-    (3, ["metar", "taf", "notam-hk", "notam-faa-search"]),
-    (0, ["metar", "taf", "notam-hk", "notam-faa-search"]),
-    (6, ["metar", "taf", "notam-hk", "notam-faa-search", "opensky"]),
-    (7, ["metar", "taf"]),
-])
-def test_hourly_plan_matches_old_ingest_schedule(hour, expected):
-    assert flight.pick_sources("", hour) == expected
+def test_scheduled_plan_is_weather_and_notams():
+    assert flight.pick_sources("") == ["metar", "taf", "notam-hk", "notam-faa-search"]
 
 
 def test_sources_override():
-    assert flight.pick_sources(" opensky ", 1) == ["opensky"]
-    assert flight.pick_sources("none", 6) == []
+    assert flight.pick_sources(" opensky ") == ["opensky"]
+    assert flight.pick_sources("none") == []
 
 
 def test_every_source_in_plan_is_a_cli_source():
@@ -44,9 +37,8 @@ def test_every_source_in_plan_is_a_cli_source():
     import aviation.cli as cli
 
     cli_choices = inspect.getsource(cli.main)
-    for hour in range(24):
-        for source in flight.sources_for_hour(hour):
-            assert f'"{source}"' in cli_choices
+    for source in flight.PLAN:
+        assert f'"{source}"' in cli_choices
 
 
 @pytest.mark.parametrize("value", [
@@ -67,10 +59,32 @@ def test_sql_map_and_list():
     assert duckdb.sql(f"select {deploy.sql_list(['x', 'y'])}").fetchone()[0] == ["x", "y"]
 
 
-def test_flight_placeholders_present():
-    source = (ROOT / "flights" / "aviation_pipeline" / "main.py").read_text()
+@pytest.mark.parametrize("name", list(deploy.FLIGHTS))
+def test_flight_placeholders_present(name):
+    source = (ROOT / "flights" / name / "main.py").read_text()
     assert 'REPO = "__REPO__"' in source
     assert 'GIT_SHA = "__GIT_SHA__"' in source
+    assert (ROOT / "flights" / name / "requirements.txt").exists()
+
+
+initial_load = _load("initial_load_main", ROOT / "flights" / "initial_load" / "main.py")
+
+
+def test_initial_load_steps():
+    assert initial_load.pick_steps("") == ["weather", "flights"]
+    assert initial_load.pick_steps(" flights ") == ["flights"]
+    with pytest.raises(SystemExit):
+        initial_load.pick_steps("weather opensky")
+
+
+def test_initial_load_steps_are_cli_backfills():
+    import inspect
+
+    import aviation.cli as cli
+
+    source = inspect.getsource(cli.main)
+    for step in initial_load.STEPS:
+        assert f'"{step}"' in source
 
 
 
@@ -111,30 +125,32 @@ class _Rows:
 
 @pytest.mark.parametrize("existing, verb", [((), "md_create_flight"), (("abc",), "md_update_flight")])
 def test_flight_is_published_unscheduled(monkeypatch, existing, verb):
-    # Scheduled Flights need a Business plan; GitHub Actions triggers the runs instead.
+    # Scheduled Flights need a paid plan (this account is on the free plan); GitHub Actions
+    # triggers the runs instead.
     monkeypatch.setenv("OPENSKY_CLIENT_ID", "id")
     monkeypatch.setenv("OPENSKY_CLIENT_SECRET", "secret")
     con = _FakeMotherDuck(existing)
-    deploy.deploy_flight(con, "0" * 40)
+    deploy.deploy_flights(con, "0" * 40, [deploy.FLIGHT_NAME])
     published = [c for c in con.calls if verb in c]
     assert len(published) == 1
     assert "schedule_cron" not in published[0]
 
 
 def test_faa_secret_is_optional(monkeypatch):
+    monkeypatch.delenv("AERODATABOX_KEY", raising=False)
     monkeypatch.setenv("OPENSKY_CLIENT_ID", "id")
     monkeypatch.setenv("OPENSKY_CLIENT_SECRET", "secret")
     monkeypatch.delenv("FAA_CLIENT_ID", raising=False)
     monkeypatch.delenv("FAA_CLIENT_SECRET", raising=False)
     con = _FakeMotherDuck(secrets=())
-    deploy.deploy_flight(con, "0" * 40)
+    deploy.deploy_flights(con, "0" * 40, [deploy.FLIGHT_NAME])
     (published,) = [c for c in con.calls if "md_update_flight" in c]
     assert "flight_secret_names := ['opensky']" in published
 
     monkeypatch.setenv("FAA_CLIENT_ID", "fid")
     monkeypatch.setenv("FAA_CLIENT_SECRET", "fsecret")
     con = _FakeMotherDuck(secrets=())
-    deploy.deploy_flight(con, "0" * 40)
+    deploy.deploy_flights(con, "0" * 40, [deploy.FLIGHT_NAME])
     (published,) = [c for c in con.calls if "md_update_flight" in c]
     assert "flight_secret_names := ['opensky', 'faa']" in published
 
@@ -143,7 +159,7 @@ def test_opensky_secret_is_required(monkeypatch):
     for k in ("OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET"):
         monkeypatch.delenv(k, raising=False)
     with pytest.raises(SystemExit):
-        deploy.deploy_flight(_FakeMotherDuck(secrets=()), "0" * 40)
+        deploy.deploy_flights(_FakeMotherDuck(secrets=()), "0" * 40, [deploy.FLIGHT_NAME])
 
 
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -171,3 +187,21 @@ def test_run_flight_waits_and_reports(monkeypatch, capsys, final, ok):
     (run_sql,) = [c for c in con.calls if "md_run_flight" in c]
     assert "'SOURCES': 'opensky'" in run_sql
     assert "log line" in capsys.readouterr().out
+
+
+def test_run_flight_passes_config_to_the_named_flight(monkeypatch):
+    con = _FakeMotherDuck(statuses=[("SUCCEEDED", 0)])
+    monkeypatch.setattr(run_flight.duckdb, "connect", lambda _: con)
+    monkeypatch.setattr(run_flight.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sys, "argv", ["run_flight.py", "--flight", "initial_load",
+                                      "--config", "STEPS=weather", "--config", "DAYS=400"])
+    run_flight.main()
+    (run_sql,) = [c for c in con.calls if "md_run_flight" in c]
+    assert "'STEPS': 'weather'" in run_sql and "'DAYS': '400'" in run_sql
+    assert "SOURCES" not in run_sql
+    assert any("flight_name = ?" in c for c in con.calls)
+
+    monkeypatch.setattr(sys, "argv", ["run_flight.py", "--flight", "initial_load",
+                                      "--config", "NOPE=1"])
+    with pytest.raises(SystemExit):
+        run_flight.main()

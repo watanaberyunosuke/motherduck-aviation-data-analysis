@@ -5,7 +5,8 @@ import pytest
 
 from aviation import warehouse
 from aviation.sources import (
-    aviationweather, notam_faa, notam_faa_search, notam_hk, notam_rapidapi, opensky,
+    aerodatabox, aviationweather, iem, notam_faa, notam_faa_search, notam_hk, notam_rapidapi,
+    opensky,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -238,7 +239,9 @@ class _FakeResponse:
 
 
 def test_opensky_run_log_counts_http_statuses(con, monkeypatch):
-    in_scope = {"est_departure_airport": "YSSY", "est_arrival_airport": "YMML"}
+    from datetime import datetime, timezone
+    # After 06 UTC, so yesterday is the newest complete day.
+    monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
     begin, end = opensky.day_window(1)
     flights = [{"icao24": f"a{i}", "firstSeen": begin + i * 100, "lastSeen": begin + i * 100 + 50,
                 "estDepartureAirport": "YSSY", "estArrivalAirport": "YMML"} for i in range(3)]
@@ -261,3 +264,159 @@ def test_opensky_run_log_counts_http_statuses(con, monkeypatch):
     assert stats["tracks"] == 1 and "429" in stats["stopped_early"]
     detail = con.execute("select detail from raw.ingest_log where source = 'opensky'").fetchone()[0]
     assert "http={'flights': {200: 1, 404: 3}, 'tracks': {200: 1, 404: 1, 429: 1}}" in detail
+
+
+# IEM rows as its CSV service returns them (data=metar plus decoded columns).
+IEM_EHAM = {"station": "EHAM", "valid": "2023-10-05 00:25", "tmpf": "62.60", "dwpf": "51.80",
+            "drct": "260.00", "sknt": "17.00", "gust": "", "vsby": "6.21", "alti": "30.15",
+            "wxcodes": "", "skyc1": "FEW", "skyl1": "2500.00",
+            "metar": "EHAM 050025Z 26017KT 9999 FEW025 17/11 Q1021 NOSIG"}
+IEM_FOG = {"station": "YSSY", "valid": "2023-10-06 19:00", "drct": "", "sknt": "3.00",
+           "vsby": "0.25", "alti": "29.97", "wxcodes": "FG", "skyc1": "VV", "skyl1": "100.00",
+           "metar": "YSSY 061900Z VRB03KT 0400 FG VV001 12/12 Q1015"}
+
+
+def test_iem_rows_take_the_awc_payload_shape():
+    p = iem.to_awc_payload(IEM_EHAM, "METAR")
+    assert p["obsTime"] == 1696465500 and p["rawOb"].startswith("METAR EHAM 050025Z")
+    assert (p["temp"], p["dewp"], p["altim"], p["wdir"], p["wspd"]) == (17, 11, 1021, 260, 17)
+    assert p["visib"] == "6+" and p["clouds"] == [{"cover": "FEW", "base": 2500}]
+    assert p["fltCat"] == "VFR" and p["source"] == "iem"
+
+    fog = iem.to_awc_payload(IEM_FOG, "SPECI")
+    assert fog["metarType"] == "SPECI" and fog["wdir"] == "VRB" and fog["wxString"] == "FG"
+    assert fog["clouds"] == [{"cover": "OVX", "base": 100}] and fog["fltCat"] == "LIFR"
+
+
+@pytest.mark.parametrize("ceiling, vis, cat", [
+    (None, 10, "VFR"), (3000, 10, "MVFR"), (3100, 5, "MVFR"), (999, 10, "IFR"),
+    (5000, 2.5, "IFR"), (400, 10, "LIFR"), (None, 0.5, "LIFR"), (None, None, None),
+])
+def test_flight_category_matches_awc_thresholds(ceiling, vis, cat):
+    assert iem.flight_category(ceiling, vis) == cat
+
+
+def test_backfill_upsert_never_overwrites_primary_rows(con, monkeypatch):
+    monkeypatch.setattr(warehouse, "BULK_THRESHOLD", 2)  # exercise the bulk path
+    awc = [{"icao": "EHAM", "obs_time": 1, "fetched_at": warehouse.utcnow(), "payload": {"from": "awc"}}]
+    warehouse.upsert(con, "raw.metar", awc, ["icao", "obs_time"])
+    archive = [{"icao": "EHAM", "obs_time": t, "fetched_at": warehouse.utcnow(),
+                "payload": {"from": "iem", "t": t}} for t in (1, 2, 3, 3)]
+    warehouse.upsert(con, "raw.metar", archive, ["icao", "obs_time"], overwrite=False)
+    rows = con.execute("select obs_time, payload ->> 'from' from raw.metar order by 1").fetchall()
+    assert rows == [(1, "awc"), (2, "iem"), (3, "iem")]
+
+
+def test_aerodatabox_windows_cover_the_utc_day_within_12_hours():
+    from datetime import date, timedelta
+    from zoneinfo import ZoneInfo
+    plain = aerodatabox.windows(date(2026, 6, 1), ZoneInfo("Asia/Hong_Kong"))
+    assert [(a.isoformat(), b.isoformat()) for a, b in plain] == [
+        ("2026-06-01T08:00:00", "2026-06-01T19:59:00"), ("2026-06-01T20:00:00", "2026-06-02T07:59:00")]
+    # Sydney's clocks go forward at 02:00 local on 4 Oct 2026 (16:00 UTC on the 3rd): that
+    # UTC half-day spans 13 local hours (22:00 to 11:00), so it is split.
+    dst = aerodatabox.windows(date(2026, 10, 3), ZoneInfo("Australia/Sydney"))
+    assert len(dst) == 3
+    assert all(b - a < timedelta(hours=12) for a, b in dst)
+
+
+def test_aerodatabox_rows_fill_in_the_boards_own_airport():
+    from datetime import datetime, timezone
+    board = {"departures": [{
+        "movement": {"airport": {"icao": "YMML"}, "scheduledTime": {"utc": "2026-09-21 01:00Z"},
+                     "revisedTime": {"utc": "2026-09-21 01:20Z"}},
+        "number": "QF 400", "callSign": "QFA400", "status": "Departed",
+        "aircraft": {"modeS": "7C6B2D"}}], "arrivals": None}
+    (row,) = aerodatabox.flight_rows("YSSY", board)
+    assert row["flight_id"] == "QF400@2026-09-21T01:00Z" and row["icao24"] == "7c6b2d"
+    assert row["payload"]["departure"]["airport"]["icao"] == "YSSY"
+    revised = datetime(2026, 9, 21, 1, 20, tzinfo=timezone.utc)
+    assert row["departure_epoch"] == int(revised.timestamp()) and row["arrival_epoch"] is None
+
+
+def test_iem_report_types_follow_the_stations_routine_minutes():
+    # Sydney reports routinely at :00 and :30 (IEM calls the :30 ones specials); the
+    # 04:47 report is a real special.
+    valid = [f"2023-10-05 {h:02d}:{m}" for h in range(6) for m in ("00", "30")] + ["2023-10-05 04:47"]
+    types = iem.metar_types([{"valid": v} for v in valid])
+    assert types[:-1] == ["METAR"] * 12 and types[-1] == "SPECI"
+
+
+def test_weather_lookback_covers_the_gap_between_runs(con, monkeypatch):
+    from datetime import timedelta
+    windows, taf_times = [], []
+    monkeypatch.setattr(aviationweather.time, "sleep", lambda _: None)
+    monkeypatch.setattr(aviationweather, "fetch_metar",
+                        lambda icaos, hours, end=None: windows.append((end - timedelta(hours=hours), end)) or [])
+    monkeypatch.setattr(aviationweather, "fetch_taf",
+                        lambda icaos, at=None: taf_times.append(at) or [])
+    aviationweather.ingest_metar(con, ["EHAM"], 26)
+    aviationweather.ingest_taf(con, ["EHAM"], 26)
+    # 6-hour chunks back from now, contiguous, 26 hours in all.
+    assert all(b[0] == a[1] for a, b in zip(windows[1:], windows))
+    assert windows[0][1] - windows[-1][0] == timedelta(hours=26)
+    assert max(b - a for a, b in windows) <= timedelta(hours=6)
+    # The current TAFs, then the ones current at each of the last 26 hours.
+    assert taf_times[0] is None and len(taf_times) == 27
+
+
+def test_a_day_counts_as_complete_from_06_utc():
+    from datetime import datetime, timezone
+    assert warehouse.newest_complete_day(1, datetime(2026, 10, 5, 5, 59, tzinfo=timezone.utc)) == 2
+    assert warehouse.newest_complete_day(1, datetime(2026, 10, 5, 6, 0, tzinfo=timezone.utc)) == 1
+
+
+class _FakeOpenSky:
+    calls: list = []
+
+    def __init__(self, min_credits_remaining=200):
+        self.credits_remaining, self.statuses = {}, {}
+
+    def flights(self, direction, airport, begin, end):
+        _FakeOpenSky.calls.append((airport, direction, begin))
+        return []
+
+    def track(self, icao24, at):
+        return None
+
+
+def test_opensky_fetches_only_missing_slots(con, monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(opensky, "OpenSkyClient", _FakeOpenSky)
+    monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
+    _FakeOpenSky.calls = []
+    # AeroDataBox already has YSSY arrivals for 3 Oct: OpenSky must not spend credits on it.
+    warehouse.mark_slot(con, "aerodatabox", "YSSY", "arrival", datetime(2026, 10, 3).date(), 5)
+    cfg = {"days_back": 1, "backfill_days": 3, "max_backfill_calls_per_run": 1000}
+    stats = opensky.ingest(con, ["YSSY", "EHAM"], cfg)
+    # 3 days x 2 airports x 2 directions, less the slot AeroDataBox has.
+    assert stats["slots"] == 11 and len(_FakeOpenSky.calls) == 11
+    assert ("YSSY", "arrival", int(datetime(2026, 10, 3, tzinfo=timezone.utc).timestamp())) \
+        not in _FakeOpenSky.calls
+    # Newest first: 4 Oct before 3 Oct before 2 Oct.
+    assert _FakeOpenSky.calls[0][2] > _FakeOpenSky.calls[-1][2]
+
+    _FakeOpenSky.calls = []
+    assert opensky.ingest(con, ["YSSY", "EHAM"], cfg)["slots"] == 0, "the next hourly run has nothing to fetch"
+
+
+def test_aerodatabox_spends_units_only_on_missing_days(con, monkeypatch):
+    from datetime import datetime, timezone
+
+    class FakeClient:
+        def __init__(self, provider):
+            self.calls = 0
+
+        def fids(self, icao, start, end):
+            self.calls += 1
+            return {}
+
+    monkeypatch.setattr(aerodatabox, "AeroDataBoxClient", FakeClient)
+    monkeypatch.setattr(warehouse, "utcnow", lambda: datetime(2026, 10, 5, 7, tzinfo=timezone.utc))
+    zones = {"YSSY": "Australia/Sydney", "EHAM": "Europe/Amsterdam"}
+    # Without a configured cap: one new day for both airports (2 calls each), no more.
+    first = aerodatabox.ingest(con, zones, {"backfill_days": 30})
+    assert first["days"] == 2 and "budget" in first["stopped_early"]
+    second = aerodatabox.ingest(con, zones, {"backfill_days": 3, "max_backfill_calls_per_run": 100})
+    assert second["days"] == 4, "2 Oct and 3 Oct for both airports; 4 Oct is already loaded"
+    assert aerodatabox.ingest(con, zones, {"backfill_days": 3, "max_backfill_calls_per_run": 100})["days"] == 0

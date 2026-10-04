@@ -11,7 +11,8 @@ with points as (
 ),
 
 flights as (
-    select * from {{ ref('stg_opensky_flights') }}
+    select * from {{ ref('stg_flights') }}
+    where icao24 is not null
 ),
 
 -- Attach each track to the flight it belongs to.

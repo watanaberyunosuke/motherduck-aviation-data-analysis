@@ -1,27 +1,41 @@
 name: ingest
 
-# Hourly trigger for the MotherDuck Flight `aviation_pipeline`
+# Twice-daily trigger (00:00 and 12:00 UTC) for the MotherDuck Flight `aviation_pipeline`
 # (flights/aviation_pipeline/main.py, deployed by the ci.yml deploy job). MotherDuck only
-# schedules Flights on a Business plan, so this cron starts each run with md_run_flight
-# (scripts/run_flight.py) and waits for it; a failed Flight run fails this workflow.
-# The Flight picks this hour's sources itself (METAR + TAF hourly, HK and FAA NOTAM Search
-# NOTAMs every 3 h, OpenSky at 06 UTC) and then runs dbt build.
+# schedules Flights on paid plans and this account is on the free plan, so this cron starts
+# each run with md_run_flight (scripts/run_flight.py) and waits for it; a failed Flight run
+# fails this workflow.
+# Each run loads METARs and TAFs for the last weather.lookback_hours (26, so a dropped
+# run leaves no gap) and HK and FAA NOTAM Search NOTAMs, then runs dbt build.
+#
+# Flights run every hour on the hour on the GitHub runner, not in the Flight: `aviation
+# backfill flights` fetches each (airport, direction, UTC day) of the last 30 days not yet
+# loaded (AeroDataBox if its key is set, then OpenSky), newest first, plus tracks for the
+# newest day, then dbt build. Loaded days are skipped, so most runs only add tracks; a
+# new day is loaded once it is complete (06 UTC, after OpenSky's nightly batch). This
+# keeps the slowest step out of the plan's daily Flight minutes, and OpenSky has timed
+# out from the Flight's servers but not from GitHub's.
 #
 # Manual runs can pick sources, and `runner: github` runs ingest + dbt on the GitHub
-# runner instead, as a fallback if the Flight is unavailable.
+# runner instead, as a fallback if the Flight is unavailable (or the plan's daily Flight
+# minutes are spent). backfill-weather / backfill-flights load history: on the Flight
+# runner through the `initial_load` Flight, on the GitHub runner with `aviation backfill`.
 # Required repository secrets: MOTHERDUCK_TOKEN (and OPENSKY_CLIENT_ID /
-# OPENSKY_CLIENT_SECRET, and optionally FAA_CLIENT_ID / FAA_CLIENT_SECRET, for the github
-# runner; the Flight uses its own `opensky` and `faa` secrets).
+# OPENSKY_CLIENT_SECRET, and optionally FAA_CLIENT_ID / FAA_CLIENT_SECRET and
+# AERODATABOX_KEY, for the github runner; the Flight uses its own `opensky`, `faa` and
+# `aerodatabox` secrets).
 on:
   schedule:
-    - cron: "7 * * * *"  # UTC, off the hour (GitHub delays jobs queued at :00)
+    - cron: "0 0,12 * * *"  # UTC: the Flight
+    - cron: "0 * * * *"     # hourly flights on the GitHub runner (see above)
   workflow_dispatch:
     inputs:
       source:
-        description: "Sources to ingest (hourly = this hour's Flight plan)"
+        description: "Sources to ingest (scheduled = the Flight's plan: weather + NOTAMs)"
         type: choice
-        options: [hourly, metar, taf, notam-hk, notam-faa-search, opensky, all, none]
-        default: hourly
+        options: [scheduled, metar, taf, notam-hk, notam-faa-search, aerodatabox, opensky, all, none,
+                  backfill-weather, backfill-flights]
+        default: scheduled
       runner:
         description: "Where to run"
         type: choice
@@ -40,9 +54,11 @@ env:
 
 jobs:
   flight:
-    if: github.event_name == 'schedule' || inputs.runner == 'flight'
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 0,12 * * *')
+      || (github.event_name == 'workflow_dispatch' && inputs.runner == 'flight')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ startsWith(inputs.source, 'backfill-') && 65 || 30 }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
@@ -53,24 +69,31 @@ jobs:
 
       - name: Run Flight and wait
         env:
-          SOURCE: ${{ inputs.source || 'hourly' }}
+          SOURCE: ${{ inputs.source || 'scheduled' }}
         run: |
           case "$SOURCE" in
-            hourly) sources="" ;;
-            all)    sources="metar taf notam-hk notam-faa-search opensky" ;;
+            backfill-*)
+              uv run python scripts/run_flight.py --flight initial_load \
+                --config "STEPS=${SOURCE#backfill-}" --timeout-minutes 60
+              exit ;;
+            scheduled) sources="" ;;
+            all)    sources="metar taf notam-hk notam-faa-search aerodatabox opensky" ;;
             *)      sources="$SOURCE" ;;
           esac
           uv run python scripts/run_flight.py --sources "$sources"
 
   github:
-    if: github.event_name == 'workflow_dispatch' && inputs.runner == 'github'
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 * * * *')
+      || (github.event_name == 'workflow_dispatch' && inputs.runner == 'github')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ (github.event_name == 'schedule' || startsWith(inputs.source, 'backfill-')) && 60 || 30 }}
     env:
       OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
       OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
       FAA_CLIENT_ID: ${{ secrets.FAA_CLIENT_ID }}
       FAA_CLIENT_SECRET: ${{ secrets.FAA_CLIENT_SECRET }}
+      AERODATABOX_KEY: ${{ secrets.AERODATABOX_KEY }}
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
@@ -82,14 +105,16 @@ jobs:
       - name: Ingest
         if: inputs.source != 'none'
         env:
-          SOURCE: ${{ inputs.source }}
+          # The hourly flights schedule has no inputs.
+          SOURCE: ${{ github.event_name == 'schedule' && 'backfill-flights' || inputs.source }}
         run: |
-          if [ "$SOURCE" = hourly ]; then
-            # Same plan as the Flight's sources_for_hour.
-            h=$(date -u +%-H); SOURCE="metar taf"
-            [ $((h % 3)) -eq 0 ] && SOURCE="$SOURCE notam-hk notam-faa-search"
-            [ "$h" -eq 6 ] && SOURCE="$SOURCE opensky"
-          fi
+          # Same plan as the Flight's PLAN.
+          [ "$SOURCE" = scheduled ] && SOURCE="metar taf notam-hk notam-faa-search"
+          case "$SOURCE" in
+            # As the initial_load Flight: OpenSky gets the day's credits (the floor stops it).
+            backfill-weather) exec uv run aviation backfill weather ;;
+            backfill-flights) exec uv run aviation backfill flights --opensky-calls 1000 ;;
+          esac
           status=0
           for s in $SOURCE; do
             uv run aviation ingest "$s" || status=1

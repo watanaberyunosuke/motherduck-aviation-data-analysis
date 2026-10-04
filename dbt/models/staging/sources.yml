@@ -5,7 +5,10 @@ sources:
     description: Landed by the Python ingestion (src/aviation). Full payloads kept as JSON.
     tables:
       - name: metar
-        description: Aviation Weather Center METAR/SPECI, one row per (icao, obs_time).
+        description: >
+          METAR/SPECI, one row per (icao, obs_time). From the Aviation Weather Center; older
+          than its 30 days, from the IEM archive reshaped to the same JSON
+          (payload.source = 'iem'). AWC rows win where both exist.
       - name: taf
         description: Aviation Weather Center TAFs, one row per (icao, issue_time).
       - name: notam
@@ -15,5 +18,13 @@ sources:
           each source's active list.
       - name: opensky_flights
         description: OpenSky arrivals and departures for in-scope airports.
+      - name: aerodatabox_flights
+        description: >
+          AeroDataBox airport boards (FIDS), one row per flight per board. Payload is the
+          API's flight with both legs (withLeg=true); the board's own airport is written in.
+      - name: flight_slots
+        description: >
+          Which (source, airport, direction, UTC day) flight slots were fetched, including
+          empty ones. stg_flights prefers AeroDataBox for every slot it has loaded.
       - name: opensky_tracks
         description: OpenSky /tracks/all payloads, path = [time, lat, lon, baro_alt_m, true_track, on_ground].

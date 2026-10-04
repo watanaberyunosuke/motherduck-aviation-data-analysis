@@ -1,5 +1,5 @@
--- Every departure OpenSky observed from an in-scope airport, to any destination, with the
--- weather when it took off and, where a well-covered track exists, how long it took to
+-- Every departure from an in-scope airport, to any destination (AeroDataBox where loaded,
+-- with its schedule, else OpenSky), with the weather when it took off and, where a well-covered track exists, how long it took to
 -- leave the departure terminal area against the airport's rolling median.
 -- Tracks are fetched for arrivals at in-scope airports (config/airports.yml), so only
 -- departures bound for another in-scope airport can have terminal metrics.
@@ -8,7 +8,7 @@
 
 with departures as (
     select f.*
-    from {{ ref('stg_opensky_flights') }} f
+    from {{ ref('stg_flights') }} f
     join {{ ref('airports') }} a on a.icao = f.departure_icao
     where f.first_seen_at is not null
 ),
@@ -34,12 +34,14 @@ with_track as (
       on m.icao24 = ww.icao24
      and m.track_start_epoch between ww.first_seen_epoch - 1800
                                  and coalesce(ww.last_seen_epoch, ww.first_seen_epoch)
-    qualify row_number() over (partition by ww.icao24, ww.first_seen_epoch
+    qualify row_number() over (partition by ww.flight_id
                                order by m.has_departure_coverage desc nulls last,
                                         m.track_start_epoch desc nulls last) = 1
 )
 
 select
+    flight_id,
+    source,
     icao24,
     first_seen_epoch,
     callsign,
@@ -49,8 +51,15 @@ select
     departure_iata,
     arrival_icao,
     arrival_iata,
-    -- First ADS-B position, at or shortly after take-off.
+    -- OpenSky: first ADS-B position, at or shortly after take-off. AeroDataBox: runway
+    -- time, else revised (actual), else scheduled (departure_time_is_scheduled).
     first_seen_at                                                   as departed_at,
+    scheduled_departure_at                                          as scheduled_at,
+    departure_time_is_scheduled,
+    case when not departure_time_is_scheduled
+         then date_diff('second', scheduled_departure_at, first_seen_at) / 60.0 end
+                                                                    as delay_minutes,
+    status,
     last_seen_at,
     case when date_diff('minute', metar_observed_at, first_seen_at) <= {{ metar_max_age }}
          then flight_category end                                   as flight_category,

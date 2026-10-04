@@ -1,19 +1,24 @@
 """MotherDuck Flight: scheduled ingest and dbt build for the aviation warehouse.
 
-One Flight runs the whole pipeline hourly. Running everything in one Flight means ingest
-and dbt never write to the warehouse at the same time; that was what the GitHub Actions
-concurrency group did before.
+One Flight runs weather and NOTAM ingest and dbt twice a day (ingest.yml starts it at
+00:00 and 12:00 UTC; the free plan cannot schedule Flights). Running everything in one Flight means ingest and dbt never write
+to the warehouse at the same time; that was what the GitHub Actions concurrency group did
+before. Flights are not part of it: they load once a day on the GitHub runner (ingest.yml),
+outside the plan's Flight minutes. SOURCES='aerodatabox opensky' still runs them here.
 
-Each run downloads a pinned commit of this repo from GitHub, runs the ingest sources due
-this hour (the same plan ingest.yml used), then runs `dbt build`. The commit is written
+Each run downloads a pinned commit of this repo from GitHub, runs PLAN, then runs
+`dbt build`. The commit is written
 into the source at deploy time by scripts/deploy_motherduck.py, so per-run config cannot
 change which code runs.
 
 Config (Flight config, overridable per run with MD_RUN_FLIGHT(config := MAP {...})):
     WAREHOUSE  dbt / ingest target, e.g. md:aviation
-    SOURCES    space-separated sources to run instead of this hour's plan,
-               e.g. 'opensky' or 'metar taf notam-hk notam-faa-search opensky'. 'none' runs dbt only.
+    SOURCES    space-separated sources to run instead of PLAN,
+               e.g. 'opensky' or 'metar taf notam-hk notam-faa-search aerodatabox opensky'.
+               'none' runs dbt only.
 Secret `opensky` (TYPE flights): OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET.
+Secret `aerodatabox` (TYPE flights, optional): AERODATABOX_KEY. Without it the AeroDataBox
+step is skipped and OpenSky covers all flights.
 Secret `faa` (TYPE flights, optional): FAA_CLIENT_ID, FAA_CLIENT_SECRET, for the FAA NOTAM
 API fallback (notam-faa). Unused while no airport has notam_source: faa.
 MOTHERDUCK_TOKEN is injected by the Flight runtime.
@@ -27,27 +32,21 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = "__REPO__"        # owner/name, substituted at deploy
 GIT_SHA = "__GIT_SHA__"  # commit to run, substituted at deploy
 
 
-def sources_for_hour(hour: int) -> list[str]:
-    """The schedule ingest.yml used, folded into one hourly run at :07 UTC."""
-    sources = ["metar", "taf"]
-    if hour % 3 == 0:
-        sources += ["notam-hk", "notam-faa-search"]
-    if hour == 6:
-        sources.append("opensky")  # flights + tracks for yesterday; slowest, so last
-    return sources
+# Every scheduled run. METAR and TAF fetches cover weather.lookback_hours, so running
+# twice a day (or missing a run) leaves no gap.
+PLAN = ["metar", "taf", "notam-hk", "notam-faa-search"]
 
 
-def pick_sources(override: str, hour: int) -> list[str]:
+def pick_sources(override: str) -> list[str]:
     override = override.strip()
     if not override:
-        return sources_for_hour(hour)
+        return list(PLAN)
     if override == "none":
         return []
     return override.split()
@@ -82,9 +81,8 @@ def main() -> None:
     os.environ.setdefault("WAREHOUSE", "md:aviation")
     os.environ.setdefault("DO_NOT_TRACK", "1")
 
-    hour = datetime.now(timezone.utc).hour
-    sources = pick_sources(os.environ.get("SOURCES", ""), hour)
-    print(f"commit {GIT_SHA}, UTC hour {hour}, sources: {' '.join(sources) or '(none)'}")
+    sources = pick_sources(os.environ.get("SOURCES", ""))
+    print(f"commit {GIT_SHA}, sources: {' '.join(sources) or '(none)'}")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = download_repo(REPO, GIT_SHA, Path(tmp))

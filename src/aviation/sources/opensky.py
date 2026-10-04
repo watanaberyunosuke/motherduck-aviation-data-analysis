@@ -18,13 +18,19 @@ dbt marts measure observable performance instead (see README, section 3).
 
 OpenSky's receiver coverage is densest in Europe and North America. Expect gaps for
 Australian and Asian airports, particularly at low altitude on approach.
+
+AeroDataBox (sources/aerodatabox.py) is the preferred flights source, because it has
+schedules; OpenSky is the fallback for slots AeroDataBox has not loaded, and the only
+source of flight paths. Each airport-day costs 30 of the roughly 4,000 daily flights
+credits, so filling the `backfill_days` window (30 days) takes a few days of hourly runs;
+after that each day's run loads just the new day.
 """
 from __future__ import annotations
 
 import logging
 import time
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 import requests
@@ -95,7 +101,7 @@ class OpenSkyClient:
 
 def day_window(days_back: int, now: datetime | None = None) -> tuple[int, int]:
     """[00:00, 24:00) UTC of the day `days_back` days ago."""
-    now = now or datetime.now(timezone.utc)
+    now = now or warehouse.utcnow()
     day = (now - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
     return int(day.timestamp()), int((day + timedelta(days=1)).timestamp())
 
@@ -132,52 +138,107 @@ def select_flights_to_track(con: duckdb.DuckDBPyConnection, icaos: list[str],
     Newest first because the tracks quota runs out long before the list does, and the
     oldest flights are the first to age out of /tracks. `arrivals_only` keeps flights
     landing at an in-scope airport, from any origin; departures to elsewhere are skipped.
+    Flights come from both sources: AeroDataBox flights with a Mode-S address can be
+    tracked as well as OpenSky's own.
     """
     in_list = ", ".join(f"'{c}'" for c in icaos)
-    scope = f"and f.est_arrival_airport in ({in_list})" if arrivals_only else ""
+    os_scope = f"and est_arrival_airport in ({in_list})" if arrivals_only else ""
+    adb_scope = "and direction = 'arrival'" if arrivals_only else ""
     return con.execute(f"""
-        select f.icao24, f.first_seen, f.last_seen
-        from raw.opensky_flights f
-        where f.last_seen >= ? and f.last_seen < ? {scope}
-          and not exists (
-              select 1 from raw.opensky_tracks t
-              where t.icao24 = f.icao24
-                and t.start_time between f.first_seen - 1800 and coalesce(f.last_seen, f.first_seen) )
-        order by f.last_seen desc, f.icao24
-        limit ?
-    """, [begin, end, limit]).fetchall()
+        with flights as (
+            select icao24, first_seen, last_seen
+            from raw.opensky_flights
+            where last_seen >= $begin and last_seen < $end {os_scope}
+            union all
+            select icao24, departure_epoch, arrival_epoch
+            from raw.aerodatabox_flights
+            where icao24 is not null and departure_epoch is not null
+              and arrival_epoch >= $begin and arrival_epoch < $end
+              and coalesce(status, '') not in ('Canceled', 'CanceledUncertain', 'Diverted')
+              {adb_scope}
+        )
+        select icao24, min(first_seen), max(last_seen)
+        from flights f
+        where not exists (
+            select 1 from raw.opensky_tracks t
+            where t.icao24 = f.icao24
+              and t.start_time between f.first_seen - 1800 and coalesce(f.last_seen, f.first_seen))
+        -- The same flight from both sources: one call is enough.
+        group by icao24, last_seen // 3600
+        order by max(last_seen) desc, icao24
+        limit $limit
+    """, {"begin": begin, "end": end, "limit": limit}).fetchall()
+
+
+def done_slots(con: duckdb.DuckDBPyConnection) -> set[tuple[str, str, date]]:
+    """(icao, direction, day) slots already fetched from either source."""
+    return {tuple(r) for r in con.execute(
+        "select distinct icao, direction, day_utc from raw.flight_slots").fetchall()}
+
+
+def ingest_slot(con: duckdb.DuckDBPyConnection, client: OpenSkyClient, icao: str,
+                direction: str, begin: int) -> int:
+    rows = flight_rows(client.flights(direction, icao, begin, begin + 86400))
+    n = warehouse.upsert(con, "raw.opensky_flights", rows, ["icao24", "first_seen"])
+    warehouse.mark_slot(con, "opensky", icao, direction,
+                        datetime.fromtimestamp(begin, timezone.utc).date(), n)
+    return n
 
 
 def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], cfg: dict) -> dict:
+    """Every (airport, direction) day not yet loaded by either source, from the newest
+    complete day back to `backfill_days`, newest first, then tracks for the newest day.
+
+    Loaded slots are skipped, so the hourly run spends credits only on gaps: a new day
+    once a day, older days until the window is full, and more tracks while the tracks
+    quota lasts. Flights and tracks have separate quotas, so one running out does not
+    stop the other.
+    """
     client = OpenSkyClient(min_credits_remaining=int(cfg.get("min_credits_remaining", 200)))
-    begin, end = day_window(int(cfg.get("days_back", 1)))
-    stats = {"flights": 0, "tracks": 0, "stopped_early": ""}
+    newest = warehouse.newest_complete_day(int(cfg.get("days_back", 1)))
+    oldest = max(newest, int(cfg.get("backfill_days", newest)))
+    # No cap unless configured: the credit floor is what stops a run.
+    budget = int(cfg.get("max_backfill_calls_per_run") or 10**6)
+    stats = {"flights": 0, "tracks": 0, "slots": 0, "stopped_early": ""}
 
     try:
-        for icao in icaos:
-            for direction in ("arrival", "departure"):
-                rows = flight_rows(client.flights(direction, icao, begin, end))
-                stats["flights"] += warehouse.upsert(con, "raw.opensky_flights", rows,
-                                                     ["icao24", "first_seen"])
+        done = done_slots(con)
+        try:
+            for back in range(newest, oldest + 1):
+                day_begin, _ = day_window(back)
+                day = datetime.fromtimestamp(day_begin, timezone.utc).date()
+                for icao in icaos:
+                    for direction in ("arrival", "departure"):
+                        if (icao, direction, day) in done:
+                            continue
+                        if stats["slots"] >= budget:
+                            raise CreditsExhausted(f"budget of {budget} calls spent")
+                        stats["flights"] += ingest_slot(con, client, icao, direction, day_begin)
+                        stats["slots"] += 1
+        except CreditsExhausted as exc:
+            stats["stopped_early"] = f"flights: {exc}; "
+            log.warning("OpenSky flights stopped: %s", exc)
 
+        begin, end = day_window(newest)
         todo = select_flights_to_track(con, icaos, begin, end,
                                        bool(cfg.get("track_arrivals_only", True)),
                                        int(cfg.get("max_tracks_per_run", 100)))
-        for icao24, first_seen, last_seen in todo:
-            # Any instant inside the flight identifies it; the midpoint is safest.
-            midpoint = (first_seen + (last_seen or first_seen)) // 2
-            t = client.track(icao24, midpoint)
-            if t and t.get("path"):
-                stats["tracks"] += warehouse.upsert(con, "raw.opensky_tracks", [track_row(t)],
-                                                    ["icao24", "start_time"])
-    except CreditsExhausted as exc:
-        stats["stopped_early"] = str(exc)
-        log.warning("OpenSky stopped early: %s", exc)
+        try:
+            for icao24, first_seen, last_seen in todo:
+                # Any instant inside the flight identifies it; the midpoint is safest.
+                midpoint = (first_seen + (last_seen or first_seen)) // 2
+                t = client.track(icao24, midpoint)
+                if t and t.get("path"):
+                    stats["tracks"] += warehouse.upsert(con, "raw.opensky_tracks", [track_row(t)],
+                                                        ["icao24", "start_time"])
+        except CreditsExhausted as exc:
+            stats["stopped_early"] += f"tracks: {exc}"
+            log.warning("OpenSky tracks stopped: %s", exc)
     except requests.HTTPError as exc:
-        stats["stopped_early"] = f"HTTP error: {exc}"
+        stats["stopped_early"] += f"HTTP error: {exc}"
         raise
     except Exception as exc:  # network errors, warehouse errors: still say what stopped it
-        stats["stopped_early"] = f"{type(exc).__name__}: {exc}"
+        stats["stopped_early"] += f"{type(exc).__name__}: {exc}"
         raise
     finally:
         warehouse.log_run(con, "opensky", stats["flights"] + stats["tracks"],
