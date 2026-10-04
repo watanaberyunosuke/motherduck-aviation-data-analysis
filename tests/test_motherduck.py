@@ -205,3 +205,31 @@ def test_run_flight_passes_config_to_the_named_flight(monkeypatch):
                                       "--config", "NOPE=1"])
     with pytest.raises(SystemExit):
         run_flight.main()
+
+
+class _QuotaSpent(_FakeMotherDuck):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def execute(self, sql, params=None):
+        if "md_run_flight" in sql:
+            raise self.error
+        return super().execute(sql, params)
+
+
+def test_run_flight_exits_75_when_the_daily_minutes_are_spent(monkeypatch):
+    # The workflows skip (ci.yml) or fall back to the GitHub runner (ingest.yml) on 75.
+    spent = run_flight.duckdb.PermissionException(
+        "Permission Error: Your organization has used all 30 minutes of Flight run time "
+        "included in your plan for today. Wait until tomorrow or upgrade your plan.")
+    monkeypatch.setattr(run_flight.duckdb, "connect", lambda _: _QuotaSpent(spent))
+    monkeypatch.setattr(sys, "argv", ["run_flight.py", "--sources", "metar"])
+    with pytest.raises(SystemExit) as exit_:
+        run_flight.main()
+    assert exit_.value.code == run_flight.QUOTA_SPENT == 75
+
+    other = run_flight.duckdb.PermissionException("Permission Error: no access to flight")
+    monkeypatch.setattr(run_flight.duckdb, "connect", lambda _: _QuotaSpent(other))
+    with pytest.raises(run_flight.duckdb.PermissionException):
+        run_flight.main()

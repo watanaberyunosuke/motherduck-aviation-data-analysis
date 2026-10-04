@@ -12,6 +12,10 @@ well as the deploy job.
 --sources is passed as the Flight's SOURCES config; empty runs the Flight's PLAN
 (flights/aviation_pipeline/main.py), 'none' runs dbt only. --config KEY=VALUE sets any
 other config for the run (repeatable), e.g. initial_load's STEPS or DAYS.
+
+Exits with QUOTA_SPENT (75) when the plan's daily Flight minutes are used up, so the
+workflows can tell that apart from a failed run: ci.yml skips its smoke test and ingest.yml
+runs the same sources on the GitHub runner instead.
 """
 from __future__ import annotations
 
@@ -30,6 +34,7 @@ POLL_SECONDS = 15
 # MotherDuck has reported run status both as RUN_STATUS_SUCCEEDED and as plain
 # SUCCEEDED; compare without the prefix so either form ends the wait.
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED"}
+QUOTA_SPENT = 75  # EX_TEMPFAIL: the plan's daily Flight minutes are spent (reset at 00:00 UTC)
 
 
 def normalise(status: object) -> str:
@@ -75,10 +80,18 @@ def main() -> None:
 
     con = duckdb.connect("md:")
     fid = flight_id(con, args.flight)
-    run_number, status = con.execute(
-        f"select run_number, status from md_run_flight(flight_id := {sql_str(fid)}, "
-        f"config := {sql_map(config)})"
-    ).fetchone()
+    try:
+        run_number, status = con.execute(
+            f"select run_number, status from md_run_flight(flight_id := {sql_str(fid)}, "
+            f"config := {sql_map(config)})"
+        ).fetchone()
+    except duckdb.PermissionException as e:
+        # "Your organization has used all 30 minutes of Flight run time included in your
+        # plan for today." Nothing was started.
+        if "Flight run time" not in str(e):
+            raise
+        print(f"flight {args.flight}: not started: {e}", file=sys.stderr)
+        sys.exit(QUOTA_SPENT)
     print(f"flight {args.flight}: started run {run_number} ({config})")
 
     exit_code = None
