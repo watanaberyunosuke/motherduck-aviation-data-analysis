@@ -216,10 +216,95 @@ function bearingDeg(la1: number, lo1: number, la2: number, lo2: number) {
   return ((Math.atan2(y, x) / r) + 360) % 360;
 }
 
+// Compass with the wind blowing across it: tail on the "from" bearing, head downwind,
+// matching the arrow on the map. VRB and calm have no direction to draw.
+function WindCompass({ wx, size = 64 }: { wx: Record<string, any>; size?: number }) {
+  const r = size / 2;
+  const calm = wx.wind_speed_kt == null || N(wx.wind_speed_kt) === 0;
+  const from = !calm && !wx.wind_variable && wx.wind_dir_deg != null ? (N(wx.wind_dir_deg) * Math.PI) / 180 : null;
+  const p = (a: number, d: number) => [r + d * Math.sin(a), r - d * Math.cos(a)];
+  const [x1, y1] = from == null ? [0, 0] : p(from, r - 10);
+  const [x2, y2] = from == null ? [0, 0] : p(from + Math.PI, r - 12);
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex: "none" }}>
+      <defs>
+        <marker id="compass-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4" markerHeight="4" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill={INK} />
+        </marker>
+      </defs>
+      <circle cx={r} cy={r} r={r - 6} fill="#fff" stroke={RULE} />
+      {["N", "E", "S", "W"].map((c, i) => {
+        const [x, y] = p((i * Math.PI) / 2, r - 3);
+        return <text key={c} x={x} y={y} dy={3} textAnchor="middle" fontSize={7} fill={MUTED}>{c}</text>;
+      })}
+      {from != null ? (
+        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={INK} strokeWidth={2.5} markerEnd="url(#compass-head)" />
+      ) : (
+        <text x={r} y={r} dy={3} textAnchor="middle" fontSize={9} fontWeight={600} fill={MUTED}>
+          {calm ? "Calm" : "VRB"}
+        </text>
+      )}
+    </svg>
+  );
+}
+
+// The selected airport's latest METAR, laid over the map.
+function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () => void }) {
+  const cat = wx.flight_category as string | null;
+  const row = (label: string, value: string) => (
+    <div style={{ display: "contents" }}>
+      <span style={{ color: MUTED }}>{label}</span>
+      <span style={{ fontWeight: 600, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+  return (
+    <div style={{
+      position: "absolute", top: 10, right: 10, width: 210, background: "rgba(255,255,255,0.94)",
+      border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, color: INK,
+      boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontWeight: 600 }}>{wx.iata} weather</span>
+        {cat && (
+          <span style={{ background: CATEGORY_COLORS[cat] ?? MUTED, color: "#fff", borderRadius: 4, padding: "0 5px", fontSize: 11, fontWeight: 600 }}>
+            {cat}
+          </span>
+        )}
+        <button onClick={onClose} aria-label="Hide weather"
+          style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: MUTED, fontSize: 14, lineHeight: 1 }}>
+          ×
+        </button>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "6px 0" }}>
+        <WindCompass wx={wx} />
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>{windText(wx)}</div>
+          <div style={{ color: MUTED }}>
+            {wx.wind_variable ? "Variable direction"
+              : wx.wind_dir_deg != null && N(wx.wind_speed_kt) > 0 ? `From ${String(N(wx.wind_dir_deg)).padStart(3, "0")}°` : "Wind"}
+            {wx.wind_gust_kt != null ? `, gusting ${N(wx.wind_gust_kt)} kt` : ""}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
+        {row("Visibility", visText(wx))}
+        {row("Ceiling", wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`)}
+        {row("Temp / dew", wx.temp_c == null ? "–" : `${N(wx.temp_c)}° / ${wx.dewpoint_c == null ? "–" : N(wx.dewpoint_c)}°C`)}
+        {row("QNH", wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`)}
+        {row("Weather", wx.wx_string ?? "Nil")}
+      </div>
+      {wx.metar_at && (
+        <div style={{ color: MUTED, fontSize: 11, marginTop: 6 }}>METAR {wx.metar_at}, {N(wx.metar_age_min)} min ago</div>
+      )}
+    </div>
+  );
+}
+
 function AirspaceMap({ lat, lon, wx, tracks, live }: {
   lat: number; lon: number; wx: Record<string, any> | undefined; tracks: TrackLine[]; live: Placed[];
 }) {
   const [zoom, setZoom] = useState(8);
+  const [showWeather, setShowWeather] = useState(true);
   const [cx, cy] = mercator(lat, lon, zoom);
   const x0 = cx - MAP_W / 2;
   const y0 = cy - MAP_H / 2;
@@ -245,6 +330,16 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
   const catColor = wx?.flight_category ? CATEGORY_COLORS[wx.flight_category] : MUTED;
   const windFrom = wx && !wx.wind_variable && wx.wind_dir_deg != null && N(wx.wind_speed_kt) > 0
     ? (N(wx.wind_dir_deg) * Math.PI) / 180 : null;
+  // The wind arrow starts on the upwind side and points at the airport, the way the air
+  // moves. It grows with speed (capped at 40 kt) so a strong wind reads as one.
+  const windArrow = windFrom == null ? null : (() => {
+    const ux = Math.sin(windFrom), uy = -Math.cos(windFrom);
+    const tail = 16 + 40 + Math.min(N(wx!.wind_speed_kt), 40) * 3;
+    const at = (d: number) => [MAP_W / 2 + d * ux, MAP_H / 2 + d * uy];
+    const [x1, y1] = at(tail), [x2, y2] = at(16), [lx, ly] = at(tail + 10);
+    const anchor: "start" | "end" | "middle" = ux > 0.3 ? "start" : ux < -0.3 ? "end" : "middle";
+    return { x1, y1, x2, y2, lx, ly, anchor, dy: uy > 0.3 ? 10 : uy < -0.3 ? -2 : 4 };
+  })();
   const btn: CSSProperties = {
     width: 28, height: 28, border: `1px solid ${RULE}`, background: "#fff", borderRadius: 6,
     fontSize: 16, lineHeight: "24px", cursor: "pointer", color: INK,
@@ -294,14 +389,19 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
             </g>
           );
         })}
-        {windFrom != null && (
-          <line
-            x1={MAP_W / 2 + 70 * Math.sin(windFrom)} y1={MAP_H / 2 - 70 * Math.cos(windFrom)}
-            x2={MAP_W / 2 + 16 * Math.sin(windFrom)} y2={MAP_H / 2 - 16 * Math.cos(windFrom)}
-            stroke={INK} strokeWidth={2.5} markerEnd="url(#wind-head)"
-          >
-            <title>{`Wind ${windText(wx!)}`}</title>
-          </line>
+        {windArrow && (
+          <g>
+            <title>{`Wind from ${windText(wx!)}, blowing toward the airport`}</title>
+            {/* A white casing keeps the arrow readable over tracks and traffic. */}
+            <line x1={windArrow.x1} y1={windArrow.y1} x2={windArrow.x2} y2={windArrow.y2}
+              stroke="#fff" strokeWidth={6} strokeLinecap="round" />
+            <line x1={windArrow.x1} y1={windArrow.y1} x2={windArrow.x2} y2={windArrow.y2}
+              stroke={INK} strokeWidth={3} markerEnd="url(#wind-head)" />
+            <text x={windArrow.lx} y={windArrow.ly} dy={windArrow.dy} textAnchor={windArrow.anchor}
+              fontSize={13} fontWeight={600} fill={INK} stroke="#fff" strokeWidth={3.5} paintOrder="stroke">
+              {`Wind ${windText(wx!)}`}
+            </text>
+          </g>
         )}
         <circle cx={MAP_W / 2} cy={MAP_H / 2} r={9} fill={catColor} stroke="#fff" strokeWidth={2.5}>
           <title>{`${wx?.flight_category ?? "No current category"} · ${wx ? windText(wx) : ""}`}</title>
@@ -311,6 +411,14 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
         <button style={btn} onClick={() => setZoom((z) => Math.min(11, z + 1))} aria-label="Zoom in">+</button>
         <button style={btn} onClick={() => setZoom((z) => Math.max(6, z - 1))} aria-label="Zoom out">−</button>
       </div>
+      {wx?.metar_raw != null && (showWeather
+        ? <WeatherPanel wx={wx} onClose={() => setShowWeather(false)} />
+        : (
+          <button onClick={() => setShowWeather(true)}
+            style={{ ...btn, position: "absolute", top: 10, right: 10, width: "auto", padding: "0 10px", fontSize: 12, fontWeight: 600 }}>
+            {wx.iata} weather
+          </button>
+        ))}
       <div style={{ position: "absolute", right: 6, bottom: 4, fontSize: 10, color: MUTED, background: "rgba(255,255,255,0.8)", padding: "0 4px" }}>
         Esri, HERE, Garmin, © OpenStreetMap contributors
       </div>
@@ -786,7 +894,7 @@ export default function AirportConditions() {
 
       <Section
         title="Airspace"
-        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The arrow shows the wind. Zoom out to see en route traffic."
+        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The black arrow is the surface wind, drawn from the upwind side toward the airport and longer for stronger wind; the panel shows the latest METAR. Zoom out to see en route traffic."
       >
         {!wx ? <Skeleton h={400} /> : (
           <AirspaceMap
