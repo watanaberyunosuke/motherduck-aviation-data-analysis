@@ -161,9 +161,63 @@ function useLiveAircraft(icao: string) {
 
 type TrackLine = { key: string; role: string; label: string; points: [number, number][] };
 
-function AirspaceMap({ lat, lon, wx, tracks, live, flightNumber }: {
-  lat: number; lon: number; wx: Record<string, any> | undefined; tracks: TrackLine[];
-  live: Live[]; flightNumber: (callsign: string | null) => string;
+// A live aircraft placed relative to the selected airport.
+type Placed = Live & {
+  dir: "inbound" | "outbound" | "ground" | "other";
+  other: string | null;      // origin (inbound) or destination (outbound), IATA where known
+  label: string;             // IATA flight number where the callsign maps to one
+  dist_nm: number;
+  eta_min: number | null;    // inbound and airborne only: distance / ground speed
+  usual: string | null;      // the flight's usual local arrival / departure time, "HH:MM"
+  delay_min: number | null;  // estimated minutes late against that usual time
+  rag: Rag;
+};
+
+// Delay status. OpenSky has no schedules, so "late" means later than the flight's usual
+// time at this airport over the last 30 days. Bands follow the 15-minute on-time convention.
+type Rag = "green" | "amber" | "red" | "unknown";
+const RAG_COLORS: Record<Rag, string> = {
+  green: "#16a34a", amber: "#d97706", red: "#dc2626", unknown: "#8d939c",
+};
+const ragOf = (delay: number | null): Rag =>
+  delay == null ? "unknown" : delay < 15 ? "green" : delay < 45 ? "amber" : "red";
+const ragText = (a: Placed) =>
+  a.delay_min == null ? "No usual time" : a.delay_min < -15 ? `Early ${Math.round(-a.delay_min)} min`
+    : a.delay_min < 15 ? "On time" : `Late ${Math.round(a.delay_min)} min`;
+const OTHER_COLORS = { ground: "#c4c8cf", other: "#b3b8bf" };
+const markerColor = (a: Placed) =>
+  a.dir === "inbound" || a.dir === "outbound" ? RAG_COLORS[a.rag] : OTHER_COLORS[a.dir];
+
+// Minutes after local midnight in `timeZone`, and the signed difference of two such times
+// wrapped to [-720, 720) so 23:50 vs 00:10 is -20, not 1420.
+function minuteOfDay(at: Date, timeZone: string) {
+  const [h, m] = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false })
+    .format(at).split(":").map(Number);
+  return (h % 24) * 60 + m;
+}
+const wrapMinutes = (d: number) => ((((d + 720) % 1440) + 1440) % 1440) - 720;
+const hhmm = (minutes: number) => {
+  const m = Math.round(minutes) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+};
+
+function distKm(la1: number, lo1: number, la2: number, lo2: number) {
+  const r = Math.PI / 180;
+  const h = Math.sin(((la2 - la1) * r) / 2) ** 2
+    + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(((lo2 - lo1) * r) / 2) ** 2;
+  return 2 * 6371.0088 * Math.asin(Math.sqrt(h));
+}
+
+// Initial great-circle bearing from point 1 to point 2, degrees.
+function bearingDeg(la1: number, lo1: number, la2: number, lo2: number) {
+  const r = Math.PI / 180;
+  const y = Math.sin((lo2 - lo1) * r) * Math.cos(la2 * r);
+  const x = Math.cos(la1 * r) * Math.sin(la2 * r) - Math.sin(la1 * r) * Math.cos(la2 * r) * Math.cos((lo2 - lo1) * r);
+  return ((Math.atan2(y, x) / r) + 360) % 360;
+}
+
+function AirspaceMap({ lat, lon, wx, tracks, live }: {
+  lat: number; lon: number; wx: Record<string, any> | undefined; tracks: TrackLine[]; live: Placed[];
 }) {
   const [zoom, setZoom] = useState(8);
   const [cx, cy] = mercator(lat, lon, zoom);
@@ -219,14 +273,20 @@ function AirspaceMap({ lat, lon, wx, tracks, live, flightNumber }: {
         {live.map((a) => {
           const [x, y] = xy(a.lat, a.lon);
           if (x < -10 || y < -10 || x > MAP_W + 10 || y > MAP_H + 10) return null;
-          const label = flightNumber(a.callsign) || a.icao24;
+          const label = a.label;
+          const tracked = a.dir === "inbound" || a.dir === "outbound";
           return (
             <g key={a.icao24} transform={`translate(${x.toFixed(1)},${y.toFixed(1)})`}>
-              <path d="M0,-8 L5.5,6 L0,3 L-5.5,6 Z" transform={`rotate(${N(a.track_deg)})`}
-                fill={a.on_ground ? "#9ca3af" : INK} stroke="#fff" strokeWidth={0.8} />
-              {zoom >= 9 && <text x={8} y={4} fontSize={10} fill={INK}>{label}</text>}
+              <path d="M0,-8 L5.5,6 L0,3 L-5.5,6 Z" transform={`rotate(${N(a.track_deg)}) scale(${tracked ? 1.15 : 0.9})`}
+                fill={markerColor(a)} stroke="#fff" strokeWidth={0.8} />
+              {(tracked || zoom >= 9) && zoom >= 8 && (
+                <text x={9} y={4} fontSize={10} fill={tracked ? markerColor(a) : MUTED}>{label}</text>
+              )}
               <title>
-                {`${label}${a.callsign && label !== a.callsign ? ` (${a.callsign})` : ""}\n`
+                {`${label}${a.callsign && label !== a.callsign ? ` (${a.callsign})` : ""}`
+                  + (a.dir === "inbound" ? ` from ${a.other ?? "?"}` : a.dir === "outbound" ? ` to ${a.other ?? "?"}` : "")
+                  + (a.dir === "inbound" || a.dir === "outbound" ? ` · ${ragText(a)}${a.usual ? ` (usually ${a.usual})` : ""}` : "")
+                  + `\n${Math.round(a.dist_nm)} NM out, `
                   + (a.on_ground ? "On ground" : `${a.alt_ft.toLocaleString()} ft`)
                   + (a.speed_kt != null ? `, ${a.speed_kt} kt` : "")
                   + (a.vrate_fpm ? `, ${a.vrate_fpm > 0 ? "+" : ""}${a.vrate_fpm} ft/min` : "")}
@@ -305,6 +365,7 @@ export default function AirportConditions() {
       (select count(*) from "aviation"."marts"."fct_arrivals"
        where arrival_icao = '${icao}' and arrived_at >= now() - interval 30 day) as observed,
       count(*)                                        as arrivals,
+      median(terminal_minutes)                        as median_terminal,
       median(excess_terminal_minutes)                 as median_excess,
       quantile_cont(excess_terminal_minutes, 0.9)     as p90_excess,
       avg(is_ifr::int) filter (where has_current_metar) as ifr_arrival_share
@@ -465,6 +526,37 @@ export default function AirportConditions() {
     order by departed_at
   `, ready);
 
+  // Callsigns seen arriving at / departing from this airport in the last 30 days, with
+  // their usual origin / destination. Flight numbers repeat daily, so a live aircraft
+  // with one of these callsigns is very likely inbound / outbound now.
+  //
+  // usual_min is the flight's usual local time of day (minutes after midnight): the median
+  // offset from its first observed time, wrapped so flights around midnight average right.
+  const historyQ = useSQLQuery(`
+    with seen as (
+      select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other, arrived_at as seen_at
+      from "aviation"."marts"."fct_arrivals"
+      where arrival_icao = '${icao}' and arrived_at >= now() - interval 30 day and callsign is not null
+      union all
+      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at
+      from "aviation"."marts"."fct_departures"
+      where departure_icao = '${icao}' and departed_at >= now() - interval 30 day and callsign is not null
+    ),
+    timed as (
+      select *,
+        hour(seen_at at time zone '${tz}') * 60 + minute(seen_at at time zone '${tz}') as m,
+        arg_min(hour(seen_at at time zone '${tz}') * 60 + minute(seen_at at time zone '${tz}'), seen_at)
+          over (partition by callsign, dir) as ref
+      from seen
+    )
+    select
+      callsign, dir, mode(other) as other, count(*) as n,
+      (((any_value(ref) + median(((((m - ref + 720) % 1440) + 1440) % 1440) - 720)) % 1440) + 1440) % 1440
+        as usual_min
+    from timed
+    group by callsign, dir
+  `, ready);
+
   const live = useLiveAircraft(icao);
   const airlineIata = useMemo(
     () => new Map(rowsOf(airlinesQ.data).map((r) => [String(r.icao), String(r.iata)])),
@@ -489,6 +581,68 @@ export default function AirportConditions() {
     return [...lines.values()];
   }, [tracksQ.data]);
   const wx = rowsOf(conditionsQ.data)[0];
+  const kpi = rowsOf(kpiQ.data)[0];
+  const depKpi = rowsOf(depKpiQ.data)[0];
+
+  const placed = useMemo((): Placed[] => {
+    if (!wx) return [];
+    const aLat = N(wx.lat), aLon = N(wx.lon);
+    type Seen = { other: string | null; usual: number };
+    const history = new Map<string, { inbound?: Seen; outbound?: Seen }>();
+    for (const r of rowsOf(historyQ.data)) {
+      const h = history.get(r.callsign) ?? {};
+      h[r.dir as "inbound" | "outbound"] = { other: r.other ?? null, usual: N(r.usual_min) };
+      history.set(r.callsign, h);
+    }
+    const now = live.at ?? new Date();
+    // Median minutes inside 50 NM at this airport over 30 days; fallbacks until data builds up.
+    const terminalArrMin = kpi?.median_terminal != null ? N(kpi.median_terminal) : 15;
+    const terminalDepMin = depKpi?.median_minutes != null ? N(depKpi.median_minutes) : 10;
+    return live.aircraft.map((a) => {
+      const km = distKm(a.lat, a.lon, aLat, aLon);
+      const h = a.callsign ? history.get(a.callsign) : undefined;
+      // Angle between the aircraft's track and the bearing to the airport: 0 = heading
+      // straight at it, 180 = straight away.
+      const off = Math.abs(((N(a.track_deg) - bearingDeg(a.lat, a.lon, aLat, aLon)) + 540) % 360 - 180);
+      // Beyond 30 NM, history must agree with geometry: a reused callsign flying away is
+      // not inbound. Closer in, aircraft manoeuvre on approach and departure, so trust history.
+      const near = km < 30 * 1.852;
+      let dir: Placed["dir"] = "other";
+      if (a.on_ground) dir = km < 8 ? "ground" : "other";
+      else if (h?.inbound !== undefined && h?.outbound !== undefined) dir = off < 90 ? "inbound" : "outbound";
+      else if (h?.inbound !== undefined && (near || off < 110)) dir = "inbound";
+      else if (h?.outbound !== undefined && (near || off > 70)) dir = "outbound";
+      const speed = N(a.speed_kt);
+      const seen = dir === "inbound" ? h?.inbound : dir === "outbound" ? h?.outbound : undefined;
+      // Minutes between the aircraft and the runway: at current ground speed to / from the
+      // 50 NM ring, plus this airport's median time inside it (approach, holding, climb-out),
+      // pro rata when already inside. Straight-line time alone reads 10-20 min early.
+      const terminal = dir === "inbound" ? terminalArrMin : terminalDepMin;
+      const legMin = speed < 60 ? null
+        : km > TERMINAL_KM ? ((km - TERMINAL_KM) / (speed * 1.852)) * 60 + terminal
+        : terminal * (km / TERMINAL_KM);
+      const eta_min = dir === "inbound" ? legMin : null;
+      // Inbound: ETA against usual arrival. Outbound: estimated take-off (now minus that
+      // time) against usual departure.
+      const at = legMin == null ? null : new Date(now.getTime() + (dir === "inbound" ? 1 : -1) * legMin * 60_000);
+      const delay_min = seen && at ? wrapMinutes(minuteOfDay(at, tz) - seen.usual) : null;
+      return {
+        ...a, dir,
+        other: seen?.other ?? null,
+        label: flightNumber(a.callsign) || a.icao24,
+        dist_nm: km / 1.852,
+        eta_min,
+        usual: seen ? hhmm(seen.usual) : null,
+        delay_min,
+        rag: ragOf(delay_min),
+      };
+    });
+  }, [live.aircraft, live.at, historyQ.data, wx, airlineIata, tz, kpi, depKpi]);
+  const enRoute = placed
+    .filter((a) => a.dir === "inbound" || a.dir === "outbound")
+    .sort((a, b) => (a.dir === b.dir ? (a.eta_min ?? a.dist_nm) - (b.eta_min ?? b.dist_nm) : a.dir === "inbound" ? -1 : 1));
+  const count = (dir: Placed["dir"]) => placed.filter((a) => a.dir === dir).length;
+  const ragCount = (rag: Rag) => enRoute.filter((a) => a.rag === rag).length;
 
   const hourly = useMemo(
     () => rowsOf(hourlyQ.data).map((r) => ({
@@ -505,8 +659,6 @@ export default function AirportConditions() {
     })),
     [movementsQ.data],
   );
-  const kpi = rowsOf(kpiQ.data)[0];
-  const depKpi = rowsOf(depKpiQ.data)[0];
   const name = airport?.name;
   const arrivals = rowsOf(arrivalsQ.data);
   const departures = rowsOf(departuresQ.data);
@@ -634,7 +786,7 @@ export default function AirportConditions() {
 
       <Section
         title="Airspace"
-        note="Live aircraft within about 275 km, observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the arrival and departure procedures in use, and the 50 NM terminal area. The arrow shows the wind."
+        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The arrow shows the wind. Zoom out to see en route traffic."
       >
         {!wx ? <Skeleton h={400} /> : (
           <AirspaceMap
@@ -642,17 +794,65 @@ export default function AirportConditions() {
             lon={N(wx.lon)}
             wx={wx}
             tracks={tracks}
-            live={live.aircraft}
-            flightNumber={flightNumber}
+            live={placed}
           />
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
           {live.error
             ? `Live positions unavailable: ${live.error}.`
             : live.at
-              ? `${live.aircraft.length} live aircraft from ${live.source || "ADS-B"}, updated ${clockParts(live.at, tz).time} ${iata} time. Hover an aircraft for its flight, altitude and speed.`
+              ? `${placed.length} live aircraft from ${live.source || "ADS-B"} (${count("inbound")} inbound, ${count("outbound")} outbound, ${count("ground")} on the ground here), updated ${clockParts(live.at, tz).time} ${iata} time. Hover an aircraft for its flight, route, altitude and speed.`
               : "Loading live positions…"}
           {" "}{tracks.length} tracked paths. Official SID/STAR charts are not shown; no free procedure data covers these airports.
+        </p>
+      </Section>
+
+      <Section
+        title="En route"
+        note="Airborne flights within 500 NM that use this airport. OpenSky has no schedules, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards). Inbound / outbound comes from the same 30 days of callsigns."
+      >
+        {!live.at ? <Skeleton h={160} /> : enRoute.length === 0 ? (
+          <Empty>{live.error ? "No live positions." : `No inbound or outbound flights for ${iata} recognised right now.`}</Empty>
+        ) : (
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+              <thead style={{ position: "sticky", top: 0, background: "#ffffff" }}>
+                <tr>
+                  <th style={th}>Status</th>
+                  <th style={th}>Flight</th>
+                  <th style={th}>Route</th>
+                  <th style={{ ...th, textAlign: "right" }}>Distance</th>
+                  <th style={{ ...th, textAlign: "right" }}>Altitude</th>
+                  <th style={{ ...th, textAlign: "right" }}>Speed</th>
+                  <th style={{ ...th, textAlign: "right" }}>Usual</th>
+                  <th style={{ ...th, textAlign: "right" }}>ETA ({iata} local)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {enRoute.map((a) => (
+                  <tr key={a.icao24}>
+                    <td style={td}>
+                      <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: RAG_COLORS[a.rag], marginRight: 6 }} />
+                      <span style={{ color: RAG_COLORS[a.rag], fontWeight: 600 }}>{ragText(a)}</span>
+                    </td>
+                    <td style={{ ...td, fontWeight: 600 }} title={a.callsign ?? undefined}>{a.label}</td>
+                    <td style={td}>{a.dir === "inbound" ? `${a.other ?? "?"} → ${iata}` : `${iata} → ${a.other ?? "?"}`}</td>
+                    <td style={num}>{Math.round(a.dist_nm)} NM</td>
+                    <td style={num}>{a.alt_ft.toLocaleString()} ft</td>
+                    <td style={num}>{a.speed_kt == null ? "–" : `${a.speed_kt} kt`}</td>
+                    <td style={{ ...num, color: MUTED }} title={a.dir === "inbound" ? "Usual arrival" : "Usual departure"}>{a.usual ?? "–"}</td>
+                    <td style={num}>
+                      {a.eta_min == null || !live.at ? "–"
+                        : `${clockParts(new Date(live.at.getTime() + a.eta_min * 60_000), tz).time.slice(0, 5)} (${Math.round(a.eta_min)} min)`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
+          {count("inbound")} inbound, {count("outbound")} outbound: {ragCount("green")} on time, {ragCount("amber")} amber, {ragCount("red")} red, {ragCount("unknown")} unknown. Flights that have not used {iata} in the last 30 days show as other traffic.
         </p>
       </Section>
 
