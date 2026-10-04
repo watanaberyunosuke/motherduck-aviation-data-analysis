@@ -232,3 +232,46 @@ def test_arrivals_include_every_origin(built):
     terminal = dict(rows)
     assert terminal["7c0003"] == pytest.approx(expected["7c0003"][1], abs=1e-6)
     assert terminal["7c0004"] is None, "untracked arrivals are listed without terminal metrics"
+
+
+def test_departures_measure_time_to_leave_terminal_area(built):
+    con, _ = built
+    rows = con.execute("""select icao24, departure_iata, arrival_iata, departure_terminal_minutes,
+                                 excess_departure_minutes
+                          from marts.fct_departures order by departed_at""").fetchall()
+    # The three synthetic SYD -> MEL flights and the QLK10D flight depart an in-scope
+    # airport; the Auckland and YMMB departures do not.
+    assert [r[0] for r in rows] == ["7c0000", "7c0001", "7c0002", "7c0005"]
+    for icao24, dep, arr, minutes, _ in rows[:3]:
+        assert (dep, arr) == ("SYD", "MEL")
+        path = synthetic_track(datetime(2026, 9, 20, tzinfo=timezone.utc)
+                               + timedelta(hours={"7c0000": 1, "7c0001": 3, "7c0002": 5}[icao24]),
+                               12 if icao24 == "7c0002" else 0)
+        exit_t = next(p[0] for p in path if haversine((p[1], p[2]), YSSY) > TERMINAL_KM)
+        assert minutes == pytest.approx((exit_t - path[0][0]) / 60, abs=1e-6)
+    assert rows[0][4] is None, "first departure has no baseline yet"
+    assert rows[3][3] is None, "untracked departures have no terminal metrics"
+
+
+def test_airport_conditions_one_row_per_airport(built):
+    con, _ = built
+    rows = con.execute("""select icao, iata, timezone, metar_raw is not null, notams_in_force
+                          from marts.fct_airport_conditions order by icao""").fetchall()
+    assert [r[0] for r in rows] == ["VHHH", "WSSS", "YBBN", "YMML", "YSSY"]
+    by_icao = {r[0]: r for r in rows}
+    assert by_icao["YMML"][1:4] == ("MEL", "Australia/Melbourne", True)
+    assert by_icao["YMML"][4] is None, "no NOTAM feed: unknown, not zero"
+    assert by_icao["VHHH"][4] is not None
+
+
+def test_terminal_tracks_stay_near_the_airport(built):
+    con, _ = built
+    rows = con.execute("""select airport_icao, role, count(distinct icao24), max(
+                                 2 * 6371.0088 * asin(sqrt(pow(sin(radians(t.lat - a.lat) / 2), 2)
+                                 + cos(radians(a.lat)) * cos(radians(t.lat))
+                                 * pow(sin(radians(t.lon - a.lon) / 2), 2))))
+                          from marts.fct_terminal_tracks t
+                          join reference.airports a on a.icao = t.airport_icao
+                          group by 1, 2 order by 1, 2""").fetchall()
+    assert [(r[0], r[1], r[2]) for r in rows] == [("YMML", "arrival", 4), ("YSSY", "departure", 3)]
+    assert all(r[3] <= 250 for r in rows)

@@ -41,6 +41,9 @@ OpenSky Network ─────┘   idempotent upserts,        views          t
 | `fct_notams` | NOTAM per source | Category from Q-code, runway-closure and in-force flags |
 | `fct_daily_airport_movements` | airport, UTC day | Observed arrivals and departures |
 | `fct_arrivals` | observed arrival | Every arrival at an in-scope airport, from any origin, with the flight category at landing and terminal metrics where the flight was tracked |
+| `fct_departures` | observed departure | Every departure from an in-scope airport, to any destination, with the flight category at take-off and time to leave the 50 NM terminal area against the airport's rolling median, where the flight was tracked |
+| `fct_airport_conditions` | airport | Time zone and the latest METAR (decoded and raw), TAF and NOTAM count |
+| `fct_terminal_tracks` | track point | Flight-path points within 250 km of an airport (arrival and departure ends), one per 30 s, for the map |
 | `fct_flight_track_metrics` | tracked flight | Path length, route inefficiency, terminal-area time, coverage checks |
 | `fct_arrival_weather_impact` | arrival | **Primary table.** Excess terminal time plus weather and NOTAMs at arrival. NOTAM flags are null where `has_notam_feed` is false |
 
@@ -98,7 +101,16 @@ From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `
 
 ### Dive: Airport conditions
 
-`dives/airport_conditions/index.tsx` is a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/), a React component that MotherDuck hosts and that queries `aviation.marts` live. It shows 7-day weather shares for every airport, then drills into one: 72 hours of wind and flight category, daily movements, median excess terminal time with and without each weather condition, every arrival observed on the latest day (from any origin), and the slowest arrivals. The selected airport is kept in the URL as its IATA code (`?airport=SYD`; ICAO links still work), so a link opens the same view.
+`dives/airport_conditions/index.tsx` is a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/), a React component that MotherDuck hosts and that queries `aviation.marts` live. It opens with clocks for UTC, the selected airport and Melbourne, and 7-day weather shares for every airport, then drills into one airport (HKG by default):
+
+- current conditions: the latest METAR decoded and raw, the latest TAF, and NOTAMs in force;
+- an airspace map: live aircraft around the airport, observed arrival and departure paths of tracked flights over the last 3 days (which trace the procedures in use), the 50 NM terminal area and the wind. Official SID/STAR geometry is not drawn: no free procedure data covers these airports;
+- arrival statistics, 72 hours of wind and flight category, daily movements, the weather penalty, every arrival observed on the latest local day (from any origin) and the slowest arrivals;
+- departure statistics (time to leave the terminal area against the airport's median) and every departure on the latest local day.
+
+Flight and chart times are the airport's local time (`reference.airports.timezone`); METAR and TAF times stay in UTC. The selected airport is kept in the URL as its IATA code (`?airport=SYD`; ICAO links still work), so a link opens the same view.
+
+The map is plain SVG over Esri's light grey basemap tiles, so it needs no map library. Live positions come from `/api/live/<icao>` on the Vercel site, which proxies OpenSky's `/states/all` for a 5 x 5 degree box (1 credit) and is edge-cached for 2 minutes, so every viewer shares one call. OpenSky does not allow browser requests from other sites, hence the proxy. It calls OpenSky anonymously (400 credits a day) unless `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` are set in the Vercel project (4,000 a day). Inside MotherDuck the Dive calls the production Vercel URL; if MotherDuck blocks that request, the map still shows paths and weather and says live positions are unavailable.
 
 To preview edits with hot reload, install the [MotherDuck CLI](https://motherduck.com/docs/sql-reference/motherduck-cli/) and run `motherduck dive watch dives/airport_conditions`. Only `index.tsx` and `dive.metadata.json` (title, description) are deployed.
 
