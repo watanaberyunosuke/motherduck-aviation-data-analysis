@@ -125,7 +125,8 @@ class _Rows:
 
 @pytest.mark.parametrize("existing, verb", [((), "md_create_flight"), (("abc",), "md_update_flight")])
 def test_flight_is_published_unscheduled(monkeypatch, existing, verb):
-    # Scheduled Flights need a Business plan; GitHub Actions triggers the runs instead.
+    # Scheduled Flights need a paid plan (this account is on the free plan); GitHub Actions
+    # triggers the runs instead.
     monkeypatch.setenv("OPENSKY_CLIENT_ID", "id")
     monkeypatch.setenv("OPENSKY_CLIENT_SECRET", "secret")
     con = _FakeMotherDuck(existing)

@@ -93,12 +93,12 @@ Credentials:
 
 ### Flight: `aviation_pipeline`
 
-A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs weather and NOTAM ingest at 00:07 and 12:07 UTC, started by the GitHub Actions cron in `.github/workflows/ingest.yml` (`scripts/run_flight.py`). MotherDuck only schedules Flights on a Business plan, so the Flight is published unscheduled and GitHub triggers it with `md_run_flight`, waits for the run and prints its logs; a failed run fails the workflow. Each run downloads the commit it is pinned to from GitHub, runs METAR, TAF, HK and FAA NOTAM Search ingest, then `dbt build`. A run takes about half a minute, well inside the plan's 30 daily Flight minutes. Ingest and dbt run in one process, so they never write to the warehouse at the same time.
+A [MotherDuck Flight](https://motherduck.com/docs/concepts/flights/) runs weather and NOTAM ingest at 00:00 and 12:00 UTC, started by the GitHub Actions cron in `.github/workflows/ingest.yml` (`scripts/run_flight.py`). MotherDuck only schedules Flights on paid plans and this account is on the free plan, so the Flight is published unscheduled and GitHub triggers it with `md_run_flight`, waits for the run and prints its logs; a failed run fails the workflow. Each run downloads the commit it is pinned to from GitHub, runs METAR, TAF, HK and FAA NOTAM Search ingest, then `dbt build`. A run takes about half a minute, well inside the plan's 30 daily Flight minutes. Ingest and dbt run in one process, so they never write to the warehouse at the same time.
 
 | Schedule (UTC) | Where | What |
 |---|---|---|
-| 00:07, 12:07 | Flight `aviation_pipeline` | METAR and TAF (last 26 h), HK and FAA NOTAMs, `dbt build` |
-| :17 every hour | GitHub runner | `aviation backfill flights`: missing days of the last 30 (AeroDataBox if its key is set, then OpenSky), tracks for the newest day, `dbt build` |
+| 00:00, 12:00 | Flight `aviation_pipeline` | METAR and TAF (last 26 h), HK and FAA NOTAMs, `dbt build` |
+| Every hour, on the hour | GitHub runner | `aviation backfill flights`: missing days of the last 30 (AeroDataBox if its key is set, then OpenSky), tracks for the newest day, `dbt build` |
 
 Flights run on a GitHub runner, not in the Flight. Most hourly runs find every day loaded and only add tracks; a new day is fetched once it is complete (06 UTC). That keeps the slowest step out of the plan's daily Flight minutes (30 on the current plan, which one long run can use up), and OpenSky has timed out from the Flight's servers but not from GitHub's. `SOURCES: 'aerodatabox opensky'` still runs flights in the Flight on demand.
 
@@ -123,7 +123,7 @@ python scripts/run_flight.py --flight initial_load --config STEPS=weather --time
 python scripts/run_flight.py --flight initial_load --config STEPS=flights                        # another day's OpenSky credits
 ```
 
-Config: `STEPS` (`weather`, `flights`), `DAYS` (weather history), `OPENSKY_CALLS` (default 1000; the credit floor stops it first), `AERODATABOX_CALLS` (paid units; default from config) and `DBT` (`false` to skip). On the Lite plan only one Flight runs at a time, so start it between the twice-daily runs. OpenSky allows about a week of all seven airports a day, so the hourly flights run on GitHub fills the rest of the 30 days. The same loads run on a GitHub runner, using no Flight minutes, from the `ingest` workflow with source `backfill-weather` or `backfill-flights` and `runner: github`. `scripts/deploy_motherduck.py --only flight --flight initial_load` publishes just this Flight (for example from a branch) without repointing the scheduled pipeline.
+Config: `STEPS` (`weather`, `flights`), `DAYS` (weather history), `OPENSKY_CALLS` (default 1000; the credit floor stops it first), `AERODATABOX_CALLS` (paid units; default from config) and `DBT` (`false` to skip). On the free plan only one Flight runs at a time, so start it between the twice-daily runs. OpenSky allows about a week of all seven airports a day, so the hourly flights run on GitHub fills the rest of the 30 days. The same loads run on a GitHub runner, using no Flight minutes, from the `ingest` workflow with source `backfill-weather` or `backfill-flights` and `runner: github`. `scripts/deploy_motherduck.py --only flight --flight initial_load` publishes just this Flight (for example from a branch) without repointing the scheduled pipeline.
 
 From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `runner: github` runs ingest and dbt on the GitHub runner instead of the Flight, as a fallback if the Flight is unavailable.
 
@@ -202,7 +202,7 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 | `SchemaMismatch` from RapidAPI (if re-enabled) | Provider changed its response. Inspect one raw response and update `notam_rapidapi.rows`. |
 | Days or hours look shifted | dbt forces `TimeZone: UTC` in `profiles.yml`. Ad hoc DuckDB sessions do not: run `set TimeZone='UTC'`. |
 | Deploy fails on a seed column change | Should not happen: deploy runs `dbt seed --full-refresh`. Scheduled ingest runs do not, so let a deploy finish before the next ingest. |
-| `Scheduled runs are not available on your plan` | The Flight was published with a cron. The deploy no longer sets one; GitHub Actions triggers the runs. |
+| `Scheduled runs are not available on your plan` | The Flight was published with a cron, which the free plan does not allow. The deploy no longer sets one; GitHub Actions triggers the runs. |
 | Flight run failed | `select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>)`. Each source prints `FAILED - <reason>`; the run fails if any source or dbt failed. |
 | Deploy: `Flight secret 'opensky' does not exist` | Add `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` as GitHub secrets (or export them locally) and re-run. |
 | Dive shows `Catalog does not exist` | The viewer cannot see `md:aviation`. Share the database with them. |

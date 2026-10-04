@@ -1,7 +1,7 @@
 """MotherDuck Flight: scheduled ingest and dbt build for the aviation warehouse.
 
 One Flight runs weather and NOTAM ingest and dbt twice a day (ingest.yml starts it at
-00:07 and 12:07 UTC). Running everything in one Flight means ingest and dbt never write
+00:00 and 12:00 UTC; the free plan cannot schedule Flights). Running everything in one Flight means ingest and dbt never write
 to the warehouse at the same time; that was what the GitHub Actions concurrency group did
 before. Flights are not part of it: they load once a day on the GitHub runner (ingest.yml),
 outside the plan's Flight minutes. SOURCES='aerodatabox opensky' still runs them here.

@@ -38,9 +38,10 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = "watanaberyunosuke/motherduck-aviation-data-analysis"
 DATABASE = "aviation"
 
-FLIGHT_NAME = "aviation_pipeline"  # the hourly one; scripts/run_flight.py's default
-# No schedule_cron: MotherDuck only schedules Flights on a Business plan, so the hourly
-# trigger is the cron in .github/workflows/ingest.yml (scripts/run_flight.py).
+FLIGHT_NAME = "aviation_pipeline"  # the scheduled one; scripts/run_flight.py's default
+# No schedule_cron: MotherDuck only schedules Flights on paid plans (this account is on the
+# free plan), so the trigger is the cron in .github/workflows/ingest.yml
+# (scripts/run_flight.py).
 # name -> (environment variables it holds, whether the Flight needs it to run at all)
 FLIGHT_SECRETS = {
     "opensky": (("OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET"), True),

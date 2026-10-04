@@ -1,13 +1,14 @@
 name: ingest
 
-# Twice-daily trigger (00:07 and 12:07 UTC) for the MotherDuck Flight `aviation_pipeline`
+# Twice-daily trigger (00:00 and 12:00 UTC) for the MotherDuck Flight `aviation_pipeline`
 # (flights/aviation_pipeline/main.py, deployed by the ci.yml deploy job). MotherDuck only
-# schedules Flights on a Business plan, so this cron starts each run with md_run_flight
-# (scripts/run_flight.py) and waits for it; a failed Flight run fails this workflow.
+# schedules Flights on paid plans and this account is on the free plan, so this cron starts
+# each run with md_run_flight (scripts/run_flight.py) and waits for it; a failed Flight run
+# fails this workflow.
 # Each run loads METARs and TAFs for the last weather.lookback_hours (26, so a dropped
 # run leaves no gap) and HK and FAA NOTAM Search NOTAMs, then runs dbt build.
 #
-# Flights run every hour at :17 on the GitHub runner, not in the Flight: `aviation
+# Flights run every hour on the hour on the GitHub runner, not in the Flight: `aviation
 # backfill flights` fetches each (airport, direction, UTC day) of the last 30 days not yet
 # loaded (AeroDataBox if its key is set, then OpenSky), newest first, plus tracks for the
 # newest day, then dbt build. Loaded days are skipped, so most runs only add tracks; a
@@ -25,8 +26,8 @@ name: ingest
 # `aerodatabox` secrets).
 on:
   schedule:
-    - cron: "7 */12 * * *"  # UTC, off the hour (GitHub delays jobs queued at :00): the Flight
-    - cron: "17 * * * *"    # hourly flights on the GitHub runner (see above)
+    - cron: "0 0,12 * * *"  # UTC: the Flight
+    - cron: "0 * * * *"     # hourly flights on the GitHub runner (see above)
   workflow_dispatch:
     inputs:
       source:
@@ -54,7 +55,7 @@ env:
 jobs:
   flight:
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '7 */12 * * *')
+      (github.event_name == 'schedule' && github.event.schedule == '0 0,12 * * *')
       || (github.event_name == 'workflow_dispatch' && inputs.runner == 'flight')
     runs-on: ubuntu-latest
     timeout-minutes: ${{ startsWith(inputs.source, 'backfill-') && 65 || 30 }}
@@ -83,7 +84,7 @@ jobs:
 
   github:
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '17 * * * *')
+      (github.event_name == 'schedule' && github.event.schedule == '0 * * * *')
       || (github.event_name == 'workflow_dispatch' && inputs.runner == 'github')
     runs-on: ubuntu-latest
     timeout-minutes: ${{ (github.event_name == 'schedule' || startsWith(inputs.source, 'backfill-')) && 60 || 30 }}
