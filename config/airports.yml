@@ -36,7 +36,10 @@ airports:
 
 # Flights: AeroDataBox first (it has schedules), OpenSky for every (airport, direction,
 # UTC day) AeroDataBox has not loaded. Both backfill older days a little each daily run,
-# newest first, back to `backfill_days`; OpenSky alone also supplies flight paths.
+# newest first, back to `backfill_days`; OpenSky alone also supplies flight paths. The
+# daily run is `aviation backfill flights` on the GitHub runner (ingest.yml, 06:17 UTC),
+# which lets OpenSky use all the day's credits; the budgets below apply to `aviation
+# ingest aerodatabox|opensky`.
 aerodatabox:
   # Marketplace the AERODATABOX_KEY belongs to: rapidapi | apimarket. Without a key the
   # source is skipped and OpenSky covers everything.

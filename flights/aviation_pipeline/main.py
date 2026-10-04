@@ -38,14 +38,12 @@ GIT_SHA = "__GIT_SHA__"  # commit to run, substituted at deploy
 
 
 def sources_for_hour(hour: int) -> list[str]:
-    """The schedule ingest.yml used, folded into one hourly run at :07 UTC."""
+    """Weather hourly and NOTAMs every 3 h, at :07 UTC. Flights are not here: they load
+    once a day on the GitHub runner (ingest.yml), outside the plan's Flight minutes.
+    SOURCES='aerodatabox opensky' still runs them in the Flight on demand."""
     sources = ["metar", "taf"]
     if hour % 3 == 0:
         sources += ["notam-hk", "notam-faa-search"]
-    if hour == 6:
-        # Yesterday's flights, then older days within each source's budget. AeroDataBox
-        # first, so OpenSky's backfill skips its slots; OpenSky is slowest, so last.
-        sources += ["aerodatabox", "opensky"]
     return sources
 
 

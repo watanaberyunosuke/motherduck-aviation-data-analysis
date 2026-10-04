@@ -8,7 +8,7 @@ warehouse, instead of from a laptop where every write is a round trip:
 - flights: `aviation backfill flights`: AeroDataBox (if its key is set) then OpenSky,
   newest day first, back to each source's backfill_days in config/airports.yml. OpenSky's
   daily credits allow about a week of all seven airports per run; re-run on later days,
-  or let the hourly Flight's daily backfill finish the year.
+  or let the daily flights run on GitHub (ingest.yml) finish the year.
 
 Then `dbt build`. Every step is idempotent, so a run that stops part-way (a Flight run
 is capped at an hour) can simply be run again.
