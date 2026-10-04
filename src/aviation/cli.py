@@ -3,6 +3,7 @@
     aviation ingest metar | taf | notam | notam-hk | notam-faa-search | notam-faa | notam-rapidapi
                     | aerodatabox | opensky | all
     aviation backfill weather [--days N]
+    aviation backfill flights [--opensky-calls N] [--aerodatabox-calls N]
 """
 from __future__ import annotations
 
@@ -18,7 +19,10 @@ from aviation.sources import (
 )
 
 
-def run(source: str, days: int | None = None) -> int:
+def run(source: str, days: int | None = None, opensky_calls: int | None = None,
+        aerodatabox_calls: int | None = None) -> int:
+    """Ingest one source (or `all`), or run a backfill (`backfill-weather`,
+    `backfill-flights`). The call budgets override max_backfill_calls_per_run."""
     settings = load_settings()
     con = warehouse.connect(settings.warehouse)
     failures = 0
@@ -56,15 +60,22 @@ def run(source: str, days: int | None = None) -> int:
         attempt("notam rapidapi", lambda: notam_rapidapi.ingest(con, rapid))
     # AeroDataBox before OpenSky, so OpenSky's backfill skips the slots it loaded and its
     # track selection sees its flights.
-    if source in ("aerodatabox", "all"):
+    flights = ("all", "backfill-flights")
+    adb_cfg = settings.aerodatabox
+    if aerodatabox_calls is not None:
+        adb_cfg = {**adb_cfg, "max_backfill_calls_per_run": aerodatabox_calls}
+    os_cfg = settings.opensky
+    if opensky_calls is not None:
+        os_cfg = {**os_cfg, "max_backfill_calls_per_run": opensky_calls}
+    if source in ("aerodatabox", *flights):
         missing = [k for k in aerodatabox.CREDENTIALS if not os.environ.get(k, "").strip()]
         if missing:
             print(f"aerodatabox: skipped - {' / '.join(missing)} not set; OpenSky covers flights")
         else:
             attempt("aerodatabox",
-                    lambda: aerodatabox.ingest(con, settings.timezones, settings.aerodatabox))
-    if source in ("opensky", "all"):
-        attempt("opensky", lambda: opensky.ingest(con, settings.icao_codes, settings.opensky))
+                    lambda: aerodatabox.ingest(con, settings.timezones, adb_cfg))
+    if source in ("opensky", *flights):
+        attempt("opensky", lambda: opensky.ingest(con, settings.icao_codes, os_cfg))
     if source == "backfill-weather":
         days = days or int(settings.weather.get("backfill_days", 30))
         attempt("weather backfill",
@@ -83,11 +94,18 @@ def main(argv: list[str] | None = None) -> None:
                                            "notam-faa", "notam-rapidapi", "aerodatabox",
                                            "opensky", "all"])
     backfill = sub.add_parser("backfill", help="load history (flights backfill within ingest)")
-    backfill.add_argument("what", choices=["weather"])
-    backfill.add_argument("--days", type=int, help="default: weather.backfill_days in config")
+    backfill.add_argument("what", choices=["weather", "flights"])
+    backfill.add_argument("--days", type=int, help="weather: default weather.backfill_days")
+    backfill.add_argument("--opensky-calls", type=int,
+                          help="flights: OpenSky backfill calls this run (the credit floor "
+                               "still applies); default opensky.max_backfill_calls_per_run")
+    backfill.add_argument("--aerodatabox-calls", type=int,
+                          help="flights: AeroDataBox backfill calls this run (paid units); "
+                               "default aerodatabox.max_backfill_calls_per_run")
     args = parser.parse_args(argv)
     if args.command == "backfill":
-        sys.exit(run(f"backfill-{args.what}", args.days))
+        sys.exit(run(f"backfill-{args.what}", args.days, args.opensky_calls,
+                     args.aerodatabox_calls))
     sys.exit(run(args.source))
 
 

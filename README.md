@@ -110,7 +110,19 @@ select * from md_list_flight_runs(flight_id := '<id>') order by run_number desc 
 select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
 ```
 
-`SOURCES` takes space-separated sources (`metar taf notam-hk notam-faa-search aerodatabox opensky`), or `none` for dbt only. The weather history is a one-off: `WAREHOUSE=md:aviation aviation backfill weather` (about 20 minutes, most of it stepping through AWC's TAFs).
+`SOURCES` takes space-separated sources (`metar taf notam-hk notam-faa-search aerodatabox opensky`), or `none` for dbt only.
+
+### Flight: `initial_load`
+
+The history load runs as its own Flight, `flights/initial_load/main.py`, inside MotherDuck: from a laptop every write is a round trip to MotherDuck, which made the load take hours. It is published with the pipeline but never scheduled. It runs `aviation backfill weather` (3 years of METARs, 30 days of TAFs), then `aviation backfill flights` (AeroDataBox if its key is set, then OpenSky with as many calls as the day's credits allow), then `dbt build`. A Flight run is capped at an hour, so the work can be split with config, and every step is safe to re-run:
+
+```bash
+python scripts/run_flight.py --flight initial_load --timeout-minutes 60                          # everything
+python scripts/run_flight.py --flight initial_load --config STEPS=weather --timeout-minutes 60   # weather only
+python scripts/run_flight.py --flight initial_load --config STEPS=flights                        # another day's OpenSky credits
+```
+
+Config: `STEPS` (`weather`, `flights`), `DAYS` (weather history), `OPENSKY_CALLS` (default 1000; the credit floor stops it first), `AERODATABOX_CALLS` (paid units; default from config) and `DBT` (`false` to skip). On the Lite plan only one Flight runs at a time, so start it just after an hourly run has finished. OpenSky allows about a week of all seven airports a day, so the rest of the flights year comes from the hourly Flight's daily backfill. `scripts/deploy_motherduck.py --only flight --flight initial_load` publishes just this Flight (for example from a branch) without repointing the hourly pipeline.
 
 From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `runner: github` runs ingest and dbt on the GitHub runner instead of the Flight, as a fallback if the Flight is unavailable.
 
