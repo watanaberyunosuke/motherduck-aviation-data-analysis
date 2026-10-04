@@ -99,6 +99,12 @@ select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
 
 From GitHub, run the `ingest` workflow manually and pick the sources. Choosing `runner: github` runs ingest and dbt on the GitHub runner instead of the Flight, as a fallback if the Flight is unavailable.
 
+### Agent sessions (Entire)
+
+The repo is set up for [Entire](https://entire.io), which links AI agent sessions to the commits they produce. `.entire/settings.json` enables it for Claude Code (`.claude/settings.json`) and Cursor (`.cursor/hooks.json`). Install the CLI (`curl -fsSL https://entire.io/install.sh | bash` or Homebrew), then run `entire enable` once per clone to add its git hooks; `entire status` shows the state and `entire checkpoint` / `entire search` browse past sessions.
+
+This repository is public, so `push_sessions` is `false`: checkpoints are stored as local git refs and never pushed. To share them, push to a separate private repository (`entire enable --checkpoint-remote github:<owner>/<private-repo>`) rather than to this one. Telemetry is off. The agent hooks do nothing if the Entire CLI is not installed.
+
 ### Dive: Airport conditions
 
 `dives/airport_conditions/index.tsx` is a [MotherDuck Dive](https://motherduck.com/docs/key-tasks/dives/), a React component that MotherDuck hosts and that queries `aviation.marts` live. It opens with clocks for UTC, the selected airport and Melbourne, and 7-day weather shares for every airport, then drills into one airport (HKG by default):
