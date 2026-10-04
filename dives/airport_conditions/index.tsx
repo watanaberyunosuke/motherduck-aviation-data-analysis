@@ -1,7 +1,8 @@
 // MotherDuck Dive: per-airport weather, traffic and arrival impact.
-// Complements the Vercel dashboard (fleet-wide averages + NOTAM map) with a drill-down
-// into one airport. Reads aviation.marts / aviation.reference only.
+// Reads aviation.marts / aviation.reference only. Airports and flights are shown with
+// IATA codes (SYD, QF627); the marts keep the ICAO forms too, and filters use ICAO.
 // Published by scripts/deploy_motherduck.py; preview locally with `motherduck dive watch`.
+// The same file is the Vercel site: web/ bundles it and runs its SQL on DuckDB-WASM.
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { useSQLQuery, useDiveState } from "@motherduck/react-sql-query";
 import {
@@ -62,21 +63,26 @@ const num: CSSProperties = { ...td, textAlign: "right", fontVariantNumeric: "tab
 export default function AirportConditions() {
   // Airports, busiest first, so the default selection has data to show.
   const airportsQ = useSQLQuery(`
-    select a.icao, a.name, count(i.icao24) as arrivals
+    select a.icao, a.iata, a.name, count(f.icao24) as arrivals
     from "aviation"."reference"."airports" a
-    left join "aviation"."marts"."fct_arrival_weather_impact" i on i.arrival_icao = a.icao
+    left join "aviation"."marts"."fct_arrivals" f
+      on f.arrival_icao = a.icao and f.arrived_at >= now() - interval 30 day
     group by all
-    order by arrivals desc, a.icao
+    order by arrivals desc, a.iata
   `);
   const airports = rowsOf(airportsQ.data);
+  // The URL holds the IATA code (?airport=SYD); older links with ICAO still resolve.
   const [picked, setPicked] = useDiveState<string>("airport", "");
-  const icao = picked || (airports[0]?.icao as string) || "";
+  const airport = airports.find((a) => a.iata === picked || a.icao === picked) ?? airports[0];
   // icao always comes from the airports seed, so it is safe to inline.
+  const icao = (airport?.icao as string) ?? "";
+  const iata = (airport?.iata as string) ?? icao;
   const ready = { enabled: icao !== "" };
 
   const overviewQ = useSQLQuery(`
     select
       icao,
+      iata,
       count(*)                     as hours,
       avg(is_ifr::int)             as ifr_share,
       avg(is_gusty::int)           as gusty_share,
@@ -84,12 +90,14 @@ export default function AirportConditions() {
       max(wind_gust_kt)            as max_gust_kt
     from "aviation"."marts"."fct_airport_weather_hourly"
     where hour_utc >= now() - interval 7 day
-    group by icao
-    order by icao
+    group by icao, iata
+    order by iata
   `);
 
   const kpiQ = useSQLQuery(`
     select
+      (select count(*) from "aviation"."marts"."fct_arrivals"
+       where arrival_icao = '${icao}' and arrived_at >= now() - interval 30 day) as observed,
       count(*)                                        as arrivals,
       median(excess_terminal_minutes)                 as median_excess,
       quantile_cont(excess_terminal_minutes, 0.9)     as p90_excess,
@@ -149,11 +157,35 @@ export default function AirportConditions() {
     order by ord
   `, ready);
 
+  // Every observed arrival on the latest day with data, from any origin. Terminal metrics
+  // only exist for the few arrivals whose track was fetched and well covered.
+  const arrivalsQ = useSQLQuery(`
+    with a as (
+      select *, cast(arrived_at at time zone 'UTC' as date) as day_utc
+      from "aviation"."marts"."fct_arrivals"
+      where arrival_icao = '${icao}'
+    )
+    select
+      strftime(day_utc, '%d %b %Y')                           as day,
+      strftime(arrived_at at time zone 'UTC', '%H:%M')        as arrived,
+      coalesce(flight_number_iata, callsign, icao24)          as flight,
+      callsign,
+      airline_name,
+      coalesce(departure_iata, departure_icao)                as origin,
+      departure_icao,
+      flight_category,
+      terminal_minutes,
+      excess_terminal_minutes
+    from a
+    where day_utc = (select max(day_utc) from a)
+    order by arrived_at
+  `, ready);
+
   const worstQ = useSQLQuery(`
     select
       strftime(arrived_at at time zone 'UTC', '%d %b %H:%M') as arrived,
-      coalesce(trim(callsign), icao24) as callsign,
-      departure_icao,
+      coalesce(flight_number_iata, trim(callsign), icao24) as flight,
+      coalesce(departure_iata, departure_icao) as origin,
       terminal_minutes,
       excess_terminal_minutes,
       flight_category,
@@ -183,10 +215,12 @@ export default function AirportConditions() {
     [movementsQ.data],
   );
   const kpi = rowsOf(kpiQ.data)[0];
-  const name = airports.find((a) => a.icao === icao)?.name;
+  const name = airport?.name;
+  const arrivals = rowsOf(arrivalsQ.data);
 
-  return (
-    <div style={{ fontFamily: SANS, color: INK, padding: 24, maxWidth: 1100 }}>
+  const page: CSSProperties = { fontFamily: SANS, color: INK, padding: 24, maxWidth: 1100 };
+  const intro = (
+    <>
       <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
       <p style={{ fontSize: 13, color: MUTED, margin: "4px 0 0" }}>
         Weather, observed traffic and excess terminal-area time (minutes within 50 NM beyond the
@@ -214,10 +248,10 @@ export default function AirportConditions() {
               {rowsOf(overviewQ.data).map((r) => (
                 <tr
                   key={r.icao}
-                  onClick={() => setPicked(r.icao)}
+                  onClick={() => setPicked(r.iata)}
                   style={{ cursor: "pointer", background: r.icao === icao ? "#f3f4f6" : undefined }}
                 >
-                  <td style={{ ...td, fontWeight: r.icao === icao ? 600 : 400 }}>{r.icao}</td>
+                  <td style={{ ...td, fontWeight: r.icao === icao ? 600 : 400 }} title={r.icao}>{r.iata}</td>
                   <td style={num}>{N(r.hours)}</td>
                   <td style={num}>{pct(r.ifr_share)}</td>
                   <td style={num}>{pct(r.gusty_share)}</td>
@@ -229,24 +263,49 @@ export default function AirportConditions() {
           </table>
         )}
       </Section>
+    </>
+  );
+
+  // Every per-airport section waits for the airport list, so without it they would sit on
+  // skeletons forever. Say why instead.
+  if (airportsQ.isError || (!airportsQ.isLoading && airports.length === 0)) {
+    return (
+      <div style={page}>
+        {intro}
+        <Section title="Airport detail">
+          <Empty>
+            {airportsQ.isError
+              ? `Could not load the airport list: ${String(airportsQ.error?.message ?? airportsQ.error)}`
+              : "No airports in reference.airports. Run dbt seed."}
+          </Empty>
+        </Section>
+      </div>
+    );
+  }
+
+  return (
+    <div style={page}>
+      {intro}
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 40 }}>
         <select
-          value={icao}
+          value={iata}
           onChange={(e) => setPicked(e.target.value)}
           style={{ fontSize: 15, fontWeight: 600, padding: "4px 8px", border: `1px solid ${RULE}`, borderRadius: 6 }}
         >
           {airports.map((a) => (
-            <option key={a.icao} value={a.icao}>{a.icao}</option>
+            <option key={a.icao} value={a.iata}>{a.iata}</option>
           ))}
         </select>
         <span style={{ fontSize: 15, color: MUTED }}>{name}</span>
+        <span style={{ fontSize: 12, color: MUTED }}>{icao}</span>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 24, marginTop: 20 }}>
         {kpiQ.isLoading || !kpi ? <Skeleton h={56} /> : (
           <>
-            <KPI label="Arrivals analysed, 30 days" value={String(N(kpi.arrivals))} />
+            <KPI label="Arrivals observed, 30 days" value={String(N(kpi.observed))} />
+            <KPI label="With terminal time, 30 days" value={String(N(kpi.arrivals))} />
             <KPI label="Median excess terminal time" value={mins(kpi.median_excess)} />
             <KPI label="90th percentile excess" value={mins(kpi.p90_excess)} />
             <KPI label="Arrivals in IFR / LIFR" value={pct(kpi.ifr_arrival_share)} />
@@ -256,7 +315,7 @@ export default function AirportConditions() {
 
       <Section title="Wind and flight category, last 72 hours" note="Each cell in the strip is one hour's latest METAR.">
         {hourlyQ.isLoading ? <Skeleton h={240} /> : hourly.length === 0 ? (
-          <Empty>No METARs for {icao} in the last 72 hours.</Empty>
+          <Empty>No METARs for {iata} in the last 72 hours.</Empty>
         ) : (
           <>
             <ResponsiveContainer width="100%" height={220}>
@@ -290,7 +349,7 @@ export default function AirportConditions() {
 
       <Section title="Observed movements, last 30 days" note="What OpenSky saw. Undercounts where ADS-B receiver coverage is thin.">
         {movementsQ.isLoading ? <Skeleton h={220} /> : movements.length === 0 ? (
-          <Empty>No OpenSky movements for {icao} in the last 30 days.</Empty>
+          <Empty>No OpenSky movements for {iata} in the last 30 days.</Empty>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={movements} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
@@ -311,7 +370,7 @@ export default function AirportConditions() {
         note="Median excess terminal time with and without each condition, all time. Read alongside n: small samples are noisy."
       >
         {penaltyQ.isLoading ? <Skeleton h={140} /> : rowsOf(penaltyQ.data).length === 0 ? (
-          <Empty>No arrivals at {icao} with a current METAR yet.</Empty>
+          <Empty>No arrivals at {iata} with a current METAR yet.</Empty>
         ) : (
           <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
             <thead>
@@ -343,15 +402,58 @@ export default function AirportConditions() {
         )}
       </Section>
 
+      <Section
+        title={arrivals.length ? `All arrivals, ${arrivals[0].day} (UTC)` : "All arrivals"}
+        note="Every arrival OpenSky observed on the latest day with data, from any origin. Terminal time only where the flight's track was fetched and well covered."
+      >
+        {arrivalsQ.isLoading ? <Skeleton h={200} /> : arrivals.length === 0 ? (
+          <Empty>No OpenSky arrivals at {iata} yet.</Empty>
+        ) : (
+          <div style={{ maxHeight: 420, overflowY: "auto" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+              <thead style={{ position: "sticky", top: 0, background: "#ffffff" }}>
+                <tr>
+                  <th style={th}>Arrived</th>
+                  <th style={th}>Flight</th>
+                  <th style={th}>Airline</th>
+                  <th style={th}>From</th>
+                  <th style={th}>Category</th>
+                  <th style={{ ...th, textAlign: "right" }}>Terminal time</th>
+                  <th style={{ ...th, textAlign: "right" }}>Excess</th>
+                </tr>
+              </thead>
+              <tbody>
+                {arrivals.map((r, i) => (
+                  <tr key={i}>
+                    <td style={td}>{r.arrived}</td>
+                    <td style={td} title={r.callsign ?? undefined}>{r.flight}</td>
+                    <td style={{ ...td, color: MUTED }}>{r.airline_name ?? ""}</td>
+                    <td style={td} title={r.departure_icao ?? undefined}>{r.origin ?? "–"}</td>
+                    <td style={{ ...td, color: r.flight_category ? CATEGORY_COLORS[r.flight_category] : MUTED }}>
+                      {r.flight_category ?? "–"}
+                    </td>
+                    <td style={num}>{r.terminal_minutes == null ? "–" : `${N(r.terminal_minutes).toFixed(1)} min`}</td>
+                    <td style={num}>{mins(r.excess_terminal_minutes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
+          {arrivals.length} arrivals. Hover a flight for its ICAO callsign, an origin for its ICAO code.
+        </p>
+      </Section>
+
       <Section title="Slowest arrivals, last 30 days" note="Most excess terminal-area time, with the weather when they landed.">
         {worstQ.isLoading ? <Skeleton h={200} /> : rowsOf(worstQ.data).length === 0 ? (
-          <Empty>No benchmarked arrivals at {icao} yet. Each needs at least one earlier arrival in the 30-day baseline.</Empty>
+          <Empty>No benchmarked arrivals at {iata} yet. Each needs at least one earlier arrival in the 30-day baseline.</Empty>
         ) : (
           <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
             <thead>
               <tr>
                 <th style={th}>Arrived</th>
-                <th style={th}>Callsign</th>
+                <th style={th}>Flight</th>
                 <th style={th}>From</th>
                 <th style={{ ...th, textAlign: "right" }}>Terminal time</th>
                 <th style={{ ...th, textAlign: "right" }}>Excess</th>
@@ -364,8 +466,8 @@ export default function AirportConditions() {
               {rowsOf(worstQ.data).map((r, i) => (
                 <tr key={i}>
                   <td style={td}>{r.arrived}</td>
-                  <td style={td}>{r.callsign}</td>
-                  <td style={td}>{r.departure_icao ?? "–"}</td>
+                  <td style={td}>{r.flight}</td>
+                  <td style={td}>{r.origin ?? "–"}</td>
                   <td style={num}>{N(r.terminal_minutes).toFixed(1)} min</td>
                   <td style={{ ...num, fontWeight: 600 }}>{mins(r.excess_terminal_minutes)}</td>
                   <td style={{ ...td, color: r.flight_category ? CATEGORY_COLORS[r.flight_category] : MUTED }}>

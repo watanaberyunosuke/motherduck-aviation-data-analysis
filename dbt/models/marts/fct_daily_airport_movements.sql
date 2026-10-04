@@ -12,9 +12,10 @@ with movements as (
 
 select
     m.icao,
+    a.iata,
     m.day_utc,
     count(*) filter (where direction = 'arrival')   as arrivals,
     count(*) filter (where direction = 'departure') as departures
 from movements m
 join {{ ref('airports') }} a on a.icao = m.icao
-group by 1, 2
+group by 1, 2, 3

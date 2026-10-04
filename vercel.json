@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci --prefix web",
+  "buildCommand": "npm run build --prefix web",
+  "outputDirectory": "web/dist",
+  "rewrites": [{ "source": "/api/:path*", "destination": "/api/index" }],
+  "functions": {
+    "api/index.py": {
+      "excludeFiles": "{.env,.env.*,{.cursor,.github,.pytest_cache,build,config,data,dbt,dives,flights,scripts,src,tests,web}/**}"
+    }
+  }
+}

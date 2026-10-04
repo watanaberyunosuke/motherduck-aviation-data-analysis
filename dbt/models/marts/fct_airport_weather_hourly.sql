@@ -9,8 +9,9 @@ with ranked as (
 )
 
 select
-    icao,
-    hour_utc,
+    r.icao,
+    a.iata,
+    r.hour_utc,
     observed_at,
     report_type,
     flight_category,
@@ -30,4 +31,5 @@ select
     dewpoint_c,
     altimeter_hpa,
     raw_text
-from ranked
+from ranked r
+join {{ ref('airports') }} a on a.icao = r.icao

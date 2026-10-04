@@ -126,15 +126,15 @@ def track_row(t: dict) -> dict:
 
 
 def select_flights_to_track(con: duckdb.DuckDBPyConnection, icaos: list[str],
-                            begin: int, end: int, in_scope_only: bool, limit: int) -> list[tuple]:
+                            begin: int, end: int, arrivals_only: bool, limit: int) -> list[tuple]:
     """Flights in the window that have no stored track yet, most recently landed first.
 
     Newest first because the tracks quota runs out long before the list does, and the
-    oldest flights are the first to age out of /tracks.
+    oldest flights are the first to age out of /tracks. `arrivals_only` keeps flights
+    landing at an in-scope airport, from any origin; departures to elsewhere are skipped.
     """
     in_list = ", ".join(f"'{c}'" for c in icaos)
-    scope = (f"and f.est_departure_airport in ({in_list}) and f.est_arrival_airport in ({in_list})"
-             if in_scope_only else "")
+    scope = f"and f.est_arrival_airport in ({in_list})" if arrivals_only else ""
     return con.execute(f"""
         select f.icao24, f.first_seen, f.last_seen
         from raw.opensky_flights f
@@ -161,7 +161,7 @@ def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], cfg: dict) -> dict:
                                                      ["icao24", "first_seen"])
 
         todo = select_flights_to_track(con, icaos, begin, end,
-                                       bool(cfg.get("track_in_scope_routes_only", True)),
+                                       bool(cfg.get("track_arrivals_only", True)),
                                        int(cfg.get("max_tracks_per_run", 100)))
         for icao24, first_seen, last_seen in todo:
             # Any instant inside the flight identifies it; the midpoint is safest.
