@@ -340,6 +340,56 @@ function WindCompass({ wx, size = 64 }: { wx: Record<string, any>; size?: number
   );
 }
 
+const overlayPanel: CSSProperties = {
+  background: c("panel"), border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 10px",
+  fontSize: 12, color: INK, boxShadow: "0 1px 3px rgba(0,0,0,0.08)", pointerEvents: "auto",
+};
+
+// The aircraft clicked on the map, shown under the weather panel.
+function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: string; onClose: () => void }) {
+  const hm = (d: Date) => clockParts(d, tz).time.slice(0, 5);
+  const tracked = a.dir === "inbound" || a.dir === "outbound";
+  const row = (label: string, value: string) => (
+    <div style={{ display: "contents" }}>
+      <span style={{ color: MUTED }}>{label}</span>
+      <span style={{ fontWeight: 600 }}>{value}</span>
+    </div>
+  );
+  return (
+    <div style={{ ...overlayPanel, marginTop: "auto", minHeight: 0, overflowY: "auto", textAlign: "left" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>{a.label}</div>
+          {a.callsign && a.callsign !== a.label && <div style={{ color: MUTED }}>{a.callsign}</div>}
+        </div>
+        <button onClick={onClose} aria-label="Hide flight"
+          style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: MUTED, fontSize: 14, lineHeight: 1 }}>
+          ×
+        </button>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "4px 0 6px" }}>
+        <span style={{ width: 8, height: 8, borderRadius: 4, background: markerColor(a), flex: "none" }} />
+        <span style={{ fontWeight: 600 }}>
+          {a.dir === "inbound" ? `${a.other ?? "?"} → ${iata}` : a.dir === "outbound" ? `${iata} → ${a.other ?? "?"}`
+            : a.dir === "ground" ? `On the ground at ${iata}` : "Other traffic"}
+        </span>
+        {tracked && <span style={{ color: MUTED }}>· {ragText(a)}</span>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
+        {row("Distance", `${Math.round(a.dist_nm)} NM`)}
+        {row("Altitude", a.on_ground ? "Ground" : `${a.alt_ft.toLocaleString()} ft`)}
+        {row("Speed", a.speed_kt == null ? "–" : `${a.speed_kt} kt`)}
+        {a.vrate_fpm ? row("Vertical", `${a.vrate_fpm > 0 ? "+" : ""}${a.vrate_fpm} ft/min`) : null}
+        {a.track_deg != null && row("Heading", `${String(Math.round(N(a.track_deg))).padStart(3, "0")}°`)}
+        {a.usual && row(a.dir === "inbound" ? "Usual arrival" : "Usual departure", a.usual)}
+        {a.event_at && !a.on_ground && (a.dir === "inbound"
+          ? row("ETA", `${hm(a.event_at)} (${Math.round(a.eta_min ?? 0)} min)`)
+          : row("Took off", `~${hm(a.event_at)}`))}
+      </div>
+    </div>
+  );
+}
+
 // The selected airport's latest METAR, laid over the map.
 function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () => void }) {
   const cat = wx.flight_category as string | null;
@@ -350,11 +400,7 @@ function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () =>
     </div>
   );
   return (
-    <div style={{
-      position: "absolute", top: 10, right: 10, width: 210, background: c("panel"),
-      border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, color: INK,
-      boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
-    }}>
+    <div style={overlayPanel}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontWeight: 600 }}>{wx.iata} weather</span>
         {cat && (
@@ -392,11 +438,16 @@ function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () =>
   );
 }
 
-function AirspaceMap({ lat, lon, wx, tracks, live, dark }: {
+function AirspaceMap({ lat, lon, wx, tracks, live, dark, iata, tz }: {
   lat: number; lon: number; wx: Record<string, any> | undefined; tracks: TrackLine[]; live: Placed[]; dark: boolean;
+  iata: string; tz: string;
 }) {
   const [zoom, setZoom] = useState(8);
   const [showWeather, setShowWeather] = useState(true);
+  // By transponder address, so the panel follows the aircraft across live refreshes.
+  const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => setSelected(null), [lat, lon]);
+  const sel = live.find((a) => a.icao24 === selected);
   const [cx, cy] = mercator(lat, lon, zoom);
   const x0 = cx - MAP_W / 2;
   const y0 = cy - MAP_H / 2;
@@ -427,7 +478,8 @@ function AirspaceMap({ lat, lon, wx, tracks, live, dark }: {
 
   return (
     <div style={{ position: "relative", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
-      <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} style={{ width: "100%", height: "auto", display: "block", background: c("map-bg") }}>
+      <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} onClick={() => setSelected(null)}
+        style={{ width: "100%", height: "auto", display: "block", background: c("map-bg") }}>
         {/* Half a pixel of overlap hides anti-aliasing seams between tiles. */}
         {tiles.map((t) => <image key={t.key} href={t.href} x={t.x} y={t.y} width={TILE + 0.5} height={TILE + 0.5} />)}
         <circle cx={MAP_W / 2} cy={MAP_H / 2} r={TERMINAL_KM * pxPerKm} fill="none" stroke={INK} strokeOpacity={0.35} strokeDasharray="6 5" />
@@ -446,7 +498,10 @@ function AirspaceMap({ lat, lon, wx, tracks, live, dark }: {
           const label = a.label;
           const tracked = a.dir === "inbound" || a.dir === "outbound";
           return (
-            <g key={a.icao24} transform={`translate(${x.toFixed(1)},${y.toFixed(1)})`}>
+            <g key={a.icao24} transform={`translate(${x.toFixed(1)},${y.toFixed(1)})`} style={{ cursor: "pointer" }}
+              onClick={(e) => { e.stopPropagation(); setSelected(a.icao24 === selected ? null : a.icao24); }}>
+              {/* A wider hit area than the glyph, and a ring on the selected aircraft. */}
+              <circle r={11} fill="transparent" stroke={a.icao24 === selected ? INK : "none"} strokeWidth={1.5} />
               <path d="M0,-8 L5.5,6 L0,3 L-5.5,6 Z" transform={`rotate(${N(a.track_deg)}) scale(${tracked ? 1.15 : 0.9})`}
                 fill={markerColor(a)} stroke={c("halo")} strokeWidth={0.8} />
               {(tracked || zoom >= 9) && zoom >= 8 && (
@@ -472,14 +527,21 @@ function AirspaceMap({ lat, lon, wx, tracks, live, dark }: {
         <button style={btn} onClick={() => setZoom((z) => Math.min(11, z + 1))} aria-label="Zoom in">+</button>
         <button style={btn} onClick={() => setZoom((z) => Math.max(6, z - 1))} aria-label="Zoom out">−</button>
       </div>
-      {wx?.metar_raw != null && (showWeather
-        ? <WeatherPanel wx={wx} onClose={() => setShowWeather(false)} />
-        : (
-          <button onClick={() => setShowWeather(true)}
-            style={{ ...btn, position: "absolute", top: 10, right: 10, width: "auto", padding: "0 10px", fontSize: 12, fontWeight: 600 }}>
-            {wx.iata} weather
-          </button>
-        ))}
+      {/* Right-hand column: weather at the top, the clicked aircraft anchored to the bottom. */}
+      <div style={{
+        position: "absolute", top: 10, right: 10, bottom: 24, width: 230,
+        display: "flex", flexDirection: "column", alignItems: "stretch", gap: 8, pointerEvents: "none",
+      }}>
+        {wx?.metar_raw != null && (showWeather
+          ? <WeatherPanel wx={wx} onClose={() => setShowWeather(false)} />
+          : (
+            <button onClick={() => setShowWeather(true)}
+              style={{ ...btn, alignSelf: "flex-end", width: "auto", padding: "0 10px", fontSize: 12, fontWeight: 600, pointerEvents: "auto" }}>
+              {wx.iata} weather
+            </button>
+          ))}
+        {sel && <FlightPanel a={sel} iata={iata} tz={tz} onClose={() => setSelected(null)} />}
+      </div>
       <div style={{ position: "absolute", right: 6, bottom: 4, fontSize: 10, color: MUTED, background: c("panel-faint"), padding: "0 4px" }}>
         Esri, HERE, Garmin, © OpenStreetMap contributors
       </div>
@@ -1258,7 +1320,7 @@ export default function AirportConditions() {
 
       <Section
         title="Airspace"
-        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Zoom out to see en route traffic."
+        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Click an aircraft for its details. Zoom out to see en route traffic."
       >
         {!wx ? <Skeleton h={400} /> : (
           <AirspaceMap
@@ -1268,6 +1330,8 @@ export default function AirportConditions() {
             tracks={tracks}
             live={placed}
             dark={theme.dark}
+            iata={iata}
+            tz={tz}
           />
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
