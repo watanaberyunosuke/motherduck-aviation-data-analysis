@@ -1,6 +1,7 @@
 // MotherDuck Dive: per-airport weather, traffic, arrival and departure impact.
 // Reads aviation.marts / aviation.reference only. Airports and flights are shown with
-// IATA codes (SYD, QF627); the marts keep the ICAO forms too, and filters use ICAO.
+// IATA codes (SYD, QF627); the marts keep the ICAO forms too, and filters use ICAO. A
+// flight with no IATA flight number shows its ATC callsign muted (FlightCode).
 // Flight times are shown in the airport's local time (reference.airports.timezone).
 // Published by scripts/deploy_motherduck.py; preview locally with `motherduck dive watch`.
 // The same file is the Vercel site: web/ bundles it and runs its SQL on DuckDB-WASM.
@@ -182,6 +183,14 @@ function Tile({ label, value, color }: { label: string; value: ReactNode; color?
   );
 }
 
+// A flight as shown: its IATA flight number, else the ATC callsign (or transponder address)
+// muted, so a callsign never passes for a flight number.
+function FlightCode({ iata, callsign, icao24 }: { iata?: string | null; callsign?: string | null; icao24?: string | null }) {
+  if (iata) return <span title={callsign ?? undefined}>{iata}</span>;
+  if (callsign) return <span style={{ color: MUTED }} title={`${callsign}: ATC callsign, no IATA flight number for it`}>{callsign}</span>;
+  return <span style={{ color: MUTED }} title={`${icao24}: transponder address, no callsign`}>{icao24 ?? "–"}</span>;
+}
+
 const mono: CSSProperties = {
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, background: c("code"),
   border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", margin: "4px 0 0",
@@ -241,7 +250,8 @@ type TrackLine = { key: string; role: string; label: string; points: [number, nu
 type Placed = Live & {
   dir: "inbound" | "outbound" | "ground" | "other";
   other: string | null;      // origin (inbound) or destination (outbound), IATA where known
-  label: string;             // IATA flight number where the callsign maps to one
+  flight_iata: string | null; // IATA flight number where the callsign maps to one
+  label: string;             // that, else the callsign, else the transponder address
   dist_nm: number;
   eta_min: number | null;    // inbound and airborne only: distance / ground speed
   usual: string | null;      // the flight's usual local arrival / departure time, "HH:MM"
@@ -550,7 +560,7 @@ const TERMINAL_NM = TERMINAL_KM / 1.852;
 // A recognised flight on the live feed, with its direction settled (on-ground aircraft
 // are assigned one from their usual times).
 type BoardLive = {
-  callsign: string; dir: Dir; label: string; other: string | null; usual: string | null;
+  callsign: string; dir: Dir; label: string; flight_iata: string | null; other: string | null; usual: string | null;
   on_ground: boolean; dist_nm: number; event_at: Date | null; rag: Rag; status_note: string | null;
   aircraft: Placed;
 };
@@ -579,12 +589,12 @@ function useFeedMemory(icao: string, rows: BoardLive[], at: Date | null) {
 }
 
 type BoardRow = {
-  key: string; phase: "past" | "next"; sort: number; time: string; label: string; callsign: string;
+  key: string; phase: "past" | "next"; sort: number; time: string; flight_iata: string | null; callsign: string;
   other: string | null; status: string; usual: string | null;
 };
 
 function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>, history: History,
-  now: Date, tz: string, flightNumber: (c: string) => string): BoardRow[] {
+  now: Date, tz: string, flightIata: (c: string) => string | null): BoardRow[] {
   const at = (d: Date) => clockParts(d, tz).time.slice(0, 5);
   const out: BoardRow[] = [];
   // Flights on the feed now belong to En route, not the board.
@@ -602,7 +612,7 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     const when = arriving ? (m.landed_at ?? m.event_at ?? m.gone_at) : (m.event_at ?? m.gone_at);
     if (when.getTime() < cutoff) continue;
     add({
-      phase: "past", label: m.label, callsign: m.callsign, other: m.other, usual: m.usual,
+      phase: "past", flight_iata: m.flight_iata, callsign: m.callsign, other: m.other, usual: m.usual,
       sort: when.getTime(), time: `~${at(when)}`,
       status: arriving ? "Landed" : `Departed, ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
     });
@@ -617,7 +627,7 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     if (delta < -PAST_HOURS * 60 || delta > NEXT_HOURS * 60) continue;
     const when = new Date(now.getTime() + delta * 60_000);
     add({
-      phase: delta < 0 ? "past" : "next", label: flightNumber(callsign) || callsign, callsign,
+      phase: delta < 0 ? "past" : "next", flight_iata: flightIata(callsign), callsign,
       other: seen.other, usual: hhmm(seen.usual), sort: when.getTime(), time: at(when),
       status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}, not seen live`
         : arriving ? "Expected, not yet within 500 NM" : "Expected",
@@ -645,7 +655,7 @@ function Board({ rows, dir, iata }: { rows: BoardRow[]; dir: Dir; iata: string }
     return (
       <tr key={r.key}>
         <td style={cell({ ...num, textAlign: "left", fontWeight: 600 })}>{r.time}</td>
-        <td style={cell({ ...td, fontWeight: 600 })} title={r.callsign}>{r.label}</td>
+        <td style={cell({ ...td, fontWeight: 600 })}><FlightCode iata={r.flight_iata} callsign={r.callsign} /></td>
         <td style={cell(td)}>{r.other ?? "–"}</td>
         <td style={cell(td)}>{r.status}</td>
       </tr>
@@ -835,8 +845,9 @@ export default function AirportConditions() {
     select
       strftime(day_local, '%d %b %Y')                         as day,
       strftime(arrived_at at time zone '${tz}', '%H:%M')      as arrived,
-      coalesce(flight_number_iata, callsign, icao24)          as flight,
+      flight_number_iata,
       callsign,
+      icao24,
       airline_name,
       coalesce(departure_iata, departure_icao)                as origin,
       departure_icao,
@@ -851,7 +862,9 @@ export default function AirportConditions() {
   const worstQ = useSQLQuery(`
     select
       strftime(arrived_at at time zone '${tz}', '%d %b %H:%M') as arrived,
-      coalesce(flight_number_iata, trim(callsign), icao24) as flight,
+      flight_number_iata,
+      trim(callsign) as callsign,
+      icao24,
       coalesce(departure_iata, departure_icao) as origin,
       terminal_minutes,
       excess_terminal_minutes,
@@ -888,8 +901,9 @@ export default function AirportConditions() {
     select
       strftime(day_local, '%d %b %Y')                         as day,
       strftime(departed_at at time zone '${tz}', '%H:%M')     as departed,
-      coalesce(flight_number_iata, callsign, icao24)          as flight,
+      flight_number_iata,
       callsign,
+      icao24,
       airline_name,
       coalesce(arrival_iata, arrival_icao)                    as destination,
       arrival_icao,
@@ -941,10 +955,10 @@ export default function AirportConditions() {
     () => new Map(rowsOf(airlinesQ.data).map((r) => [String(r.icao), String(r.iata)])),
     [airlinesQ.data],
   );
-  // QFA627 -> QF627, as stg_opensky_flights does; other callsigns are shown as they are.
-  const flightNumber = (callsign: string | null) => {
+  // QFA627 -> QF627, as stg_opensky_flights does; null for callsigns that do not map.
+  const flightIata = (callsign: string | null) => {
     const m = callsign ? /^([A-Z]{3})0*(\d{1,4})$/.exec(callsign) : null;
-    return m && airlineIata.has(m[1]) ? `${airlineIata.get(m[1])}${m[2]}` : callsign ?? "";
+    return m && airlineIata.has(m[1]) ? `${airlineIata.get(m[1])}${m[2]}` : null;
   };
   const tracks = useMemo(() => {
     const lines = new Map<string, TrackLine>();
@@ -1011,7 +1025,8 @@ export default function AirportConditions() {
       return {
         ...a, dir,
         other: seen?.other ?? null,
-        label: flightNumber(a.callsign) || a.icao24,
+        flight_iata: flightIata(a.callsign),
+        label: flightIata(a.callsign) ?? a.callsign ?? a.icao24,
         dist_nm: km / 1.852,
         eta_min,
         usual: seen ? hhmm(seen.usual) : null,
@@ -1031,7 +1046,7 @@ export default function AirportConditions() {
     const rows: BoardLive[] = [];
     for (const a of placed) {
       if (!a.callsign) continue;
-      const base = { callsign: a.callsign, label: a.label, on_ground: a.on_ground, dist_nm: a.dist_nm, aircraft: a };
+      const base = { callsign: a.callsign, label: a.label, flight_iata: a.flight_iata, on_ground: a.on_ground, dist_nm: a.dist_nm, aircraft: a };
       if (a.dir === "inbound" || a.dir === "outbound") {
         rows.push({ ...base, dir: a.dir, other: a.other, usual: a.usual, event_at: a.event_at, rag: a.rag,
           status_note: a.dir === "inbound" || a.delay_min != null ? ragText(a) : null });
@@ -1064,10 +1079,10 @@ export default function AirportConditions() {
   const boards = useMemo(() => {
     const now = live.at ?? new Date();
     return {
-      inbound: buildBoard("inbound", boardLive, memory, history, now, tz, flightNumber),
-      outbound: buildBoard("outbound", boardLive, memory, history, now, tz, flightNumber),
+      inbound: buildBoard("inbound", boardLive, memory, history, now, tz, flightIata),
+      outbound: buildBoard("outbound", boardLive, memory, history, now, tz, flightIata),
     };
-    // flightNumber only changes with airlineIata.
+    // flightIata only changes with airlineIata.
   }, [boardLive, memory, history, live.at, tz, airlineIata]);
 
   const hourly = useMemo(
@@ -1107,7 +1122,8 @@ export default function AirportConditions() {
       <p style={{ fontSize: 13, color: MUTED, margin: "4px 0 0" }}>
         Weather, observed traffic and excess terminal-area time (minutes within 50 NM beyond the
         airport's rolling median). Flight and chart times are the selected airport's local time;
-        METAR and TAF times are UTC (Z); daily movement counts use UTC days.
+        METAR and TAF times are UTC (Z); daily movement counts use UTC days. Flights without an
+        IATA flight number show their ATC callsign, muted.
       </p>
 
       <Clocks zones={[
@@ -1303,7 +1319,7 @@ export default function AirportConditions() {
                             : ragText(a)}
                         </span>
                       </td>
-                      <td style={{ ...td, fontWeight: 600 }} title={r.callsign}>{r.label}</td>
+                      <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} icao24={a.icao24} /></td>
                       <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
                       <td style={num}>{Math.round(r.dist_nm)} NM</td>
                       <td style={num}>{r.on_ground ? "Ground" : `${a.alt_ft.toLocaleString()} ft`}</td>
@@ -1466,7 +1482,7 @@ export default function AirportConditions() {
                 {arrivals.map((r, i) => (
                   <tr key={i}>
                     <td style={td}>{r.arrived}</td>
-                    <td style={td} title={r.callsign ?? undefined}>{r.flight}</td>
+                    <td style={td}><FlightCode iata={r.flight_number_iata} callsign={r.callsign} icao24={r.icao24} /></td>
                     <td style={{ ...td, color: MUTED }}>{r.airline_name ?? ""}</td>
                     <td style={td} title={r.departure_icao ?? undefined}>{r.origin ?? "–"}</td>
                     <td style={{ ...td, color: r.flight_category ? CATEGORY_COLORS[r.flight_category] : MUTED }}>
@@ -1481,7 +1497,7 @@ export default function AirportConditions() {
           </div>
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
-          {arrivals.length} arrivals. Hover a flight for its ICAO callsign, an origin for its ICAO code.
+          {arrivals.length} arrivals. Muted flights have no IATA flight number and show their ATC callsign. Hover a flight for its callsign, an origin for its ICAO code.
         </p>
       </details>
 
@@ -1506,7 +1522,7 @@ export default function AirportConditions() {
               {rowsOf(worstQ.data).map((r, i) => (
                 <tr key={i}>
                   <td style={td}>{r.arrived}</td>
-                  <td style={td}>{r.flight}</td>
+                  <td style={td}><FlightCode iata={r.flight_number_iata} callsign={r.callsign} icao24={r.icao24} /></td>
                   <td style={td}>{r.origin ?? "–"}</td>
                   <td style={num}>{N(r.terminal_minutes).toFixed(1)} min</td>
                   <td style={{ ...num, fontWeight: 600 }}>{mins(r.excess_terminal_minutes)}</td>
@@ -1566,7 +1582,7 @@ export default function AirportConditions() {
                 {departures.map((r, i) => (
                   <tr key={i}>
                     <td style={td}>{r.departed}</td>
-                    <td style={td} title={r.callsign ?? undefined}>{r.flight}</td>
+                    <td style={td}><FlightCode iata={r.flight_number_iata} callsign={r.callsign} icao24={r.icao24} /></td>
                     <td style={{ ...td, color: MUTED }}>{r.airline_name ?? ""}</td>
                     <td style={td} title={r.arrival_icao ?? undefined}>{r.destination ?? "–"}</td>
                     <td style={{ ...td, color: r.flight_category ? CATEGORY_COLORS[r.flight_category] : MUTED }}>
@@ -1581,7 +1597,7 @@ export default function AirportConditions() {
           </div>
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
-          {departures.length} departures. Hover a flight for its ICAO callsign, a destination for its ICAO code.
+          {departures.length} departures. Muted flights have no IATA flight number and show their ATC callsign. Hover a flight for its callsign, a destination for its ICAO code.
         </p>
       </details>
     </>,
