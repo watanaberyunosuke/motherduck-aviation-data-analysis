@@ -2,6 +2,7 @@
   "name": "aviation-web",
   "private": true,
   "type": "module",
+  "packageManager": "yarn@1.22.22",
   "description": "The Airport conditions Dive, served on Vercel and run on DuckDB-WASM",
   "scripts": {
     "dev": "vite",
