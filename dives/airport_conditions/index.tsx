@@ -1,6 +1,7 @@
 // MotherDuck Dive: per-airport weather, traffic, arrival and departure impact.
 // Reads aviation.marts / aviation.reference only. Airports and flights are shown with
-// IATA codes (SYD, QF627); the marts keep the ICAO forms too, and filters use ICAO.
+// IATA codes (SYD, QF627); the marts keep the ICAO forms too, and filters use ICAO. A
+// flight with no IATA flight number shows its ATC callsign muted (FlightCode).
 // Flight times are shown in the airport's local time (reference.airports.timezone).
 // Published by scripts/deploy_motherduck.py; preview locally with `motherduck dive watch`.
 // The same file is the Vercel site: web/ bundles it and runs its SQL on DuckDB-WASM.
@@ -19,14 +20,90 @@ const pct = (v: unknown) => (v == null ? "–" : `${Math.round(N(v) * 100)}%`);
 const mins = (v: unknown) => (v == null ? "–" : `${N(v) >= 0 ? "+" : ""}${N(v).toFixed(1)} min`);
 
 const SANS = "'Inter', system-ui, -apple-system, sans-serif";
-const INK = "#1a1a1a";
-const MUTED = "#6a6a6a";
-const RULE = "#e5e5e5";
-const BLUE = "#2563eb";
-const ORANGE = "#ea580c";
+
+// ---- Theme: colours are CSS variables on the root element, so inline styles, SVG and
+// Recharts all switch together. "auto" follows the system; a manual choice is remembered.
+const LIGHT = {
+  bg: "#ffffff", surface: "#ffffff", ink: "#1a1a1a", muted: "#6a6a6a", rule: "#e5e5e5",
+  "row-active": "#f3f4f6", code: "#f6f7f9", panel: "rgba(255,255,255,0.94)", "panel-faint": "rgba(255,255,255,0.8)",
+  "map-bg": "#eef1f4", halo: "#ffffff",
+  blue: "#2563eb", "blue-soft": "#93c5fd", orange: "#ea580c",
+  vfr: "#16a34a", mvfr: "#2563eb", ifr: "#dc2626", lifr: "#c026d3",
+  "rag-green": "#16a34a", "rag-amber": "#d97706", "rag-red": "#dc2626", "rag-unknown": "#8d939c",
+  ground: "#c4c8cf", other: "#b3b8bf",
+};
+const DARK: typeof LIGHT = {
+  bg: "#121417", surface: "#1b1e23", ink: "#e6e7e9", muted: "#9aa0a8", rule: "#2e333a",
+  "row-active": "#23272e", code: "#1b1e23", panel: "rgba(27,30,35,0.94)", "panel-faint": "rgba(27,30,35,0.8)",
+  "map-bg": "#1f2226", halo: "#121417",
+  blue: "#60a5fa", "blue-soft": "#1e4fa8", orange: "#fb923c",
+  vfr: "#22c55e", mvfr: "#60a5fa", ifr: "#f87171", lifr: "#e879f9",
+  "rag-green": "#22c55e", "rag-amber": "#fbbf24", "rag-red": "#f87171", "rag-unknown": "#8d939c",
+  ground: "#5b616a", other: "#6b7179",
+};
+const cssVars = (p: typeof LIGHT) => Object.entries(p).map(([k, v]) => `--ac-${k}:${v};`).join("");
+const THEME_CSS = `.airport-conditions{${cssVars(LIGHT)}color-scheme:light}`
+  + `.airport-conditions[data-theme="dark"]{${cssVars(DARK)}color-scheme:dark}`;
+const c = (k: keyof typeof LIGHT) => `var(--ac-${k})`;
+
+type ThemeMode = "auto" | "light" | "dark";
+const THEME_KEY = "airport-conditions-theme";
+const darkQuery = () =>
+  typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+
+function useTheme() {
+  // Storage can be blocked (private windows, sandboxed hosts); then the choice lasts the visit.
+  const [mode, setModeState] = useState<ThemeMode>(() => {
+    try {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === "light" || saved === "dark") return saved;
+    } catch { /* fall through */ }
+    return "auto";
+  });
+  const [systemDark, setSystemDark] = useState(() => darkQuery()?.matches ?? false);
+  useEffect(() => {
+    const q = darkQuery();
+    if (!q) return;
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    q.addEventListener("change", onChange);
+    return () => q.removeEventListener("change", onChange);
+  }, []);
+  const setMode = (next: ThemeMode) => {
+    try {
+      if (next === "auto") localStorage.removeItem(THEME_KEY);
+      else localStorage.setItem(THEME_KEY, next);
+    } catch { /* keep it for this visit only */ }
+    setModeState(next);
+  };
+  return { mode, setMode, dark: mode === "dark" || (mode === "auto" && systemDark) };
+}
+
+function ThemeSwitch({ mode, onChange }: { mode: ThemeMode; onChange: (m: ThemeMode) => void }) {
+  return (
+    <div role="group" aria-label="Colour theme"
+      style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 6, overflow: "hidden", flex: "none" }}>
+      {(["auto", "light", "dark"] as const).map((m) => (
+        <button key={m} onClick={() => onChange(m)} aria-pressed={mode === m}
+          style={{
+            border: "none", padding: "3px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+            background: mode === m ? c("row-active") : c("surface"), color: mode === m ? INK : MUTED,
+            fontWeight: mode === m ? 600 : 400,
+          }}>
+          {humanize(m)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const INK = c("ink");
+const MUTED = c("muted");
+const RULE = c("rule");
+const BLUE = c("blue");
+const ORANGE = c("orange");
 // Standard aviation flight-category colours.
 const CATEGORY_COLORS: Record<string, string> = {
-  VFR: "#16a34a", MVFR: "#2563eb", IFR: "#dc2626", LIFR: "#c026d3",
+  VFR: c("vfr"), MVFR: c("mvfr"), IFR: c("ifr"), LIFR: c("lifr"),
 };
 
 function Skeleton({ h = 200 }: { h?: number }) {
@@ -106,8 +183,16 @@ function Tile({ label, value, color }: { label: string; value: ReactNode; color?
   );
 }
 
+// A flight as shown: its IATA flight number, else the ATC callsign (or transponder address)
+// muted, so a callsign never passes for a flight number.
+function FlightCode({ iata, callsign, icao24 }: { iata?: string | null; callsign?: string | null; icao24?: string | null }) {
+  if (iata) return <span title={callsign ?? undefined}>{iata}</span>;
+  if (callsign) return <span style={{ color: MUTED }} title={`${callsign}: ATC callsign, no IATA flight number for it`}>{callsign}</span>;
+  return <span style={{ color: MUTED }} title={`${icao24}: transponder address, no callsign`}>{icao24 ?? "–"}</span>;
+}
+
 const mono: CSSProperties = {
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, background: "#f6f7f9",
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, background: c("code"),
   border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", margin: "4px 0 0",
 };
 
@@ -165,26 +250,33 @@ type TrackLine = { key: string; role: string; label: string; points: [number, nu
 type Placed = Live & {
   dir: "inbound" | "outbound" | "ground" | "other";
   other: string | null;      // origin (inbound) or destination (outbound), IATA where known
-  label: string;             // IATA flight number where the callsign maps to one
+  flight_iata: string | null; // IATA flight number where the callsign maps to one
+  label: string;             // that, else the callsign, else the transponder address
   dist_nm: number;
   eta_min: number | null;    // inbound and airborne only: distance / ground speed
   usual: string | null;      // the flight's usual local arrival / departure time, "HH:MM"
   delay_min: number | null;  // estimated minutes late against that usual time
   rag: Rag;
+  event_at: Date | null;     // estimated arrival (inbound) or take-off (outbound)
 };
+
+type Dir = "inbound" | "outbound";
+// Per callsign and direction over the last 30 days: usual origin / destination, usual
+// local time (minutes after midnight) and days seen out of the last 14.
+type History = Map<string, Partial<Record<Dir, { other: string | null; usual: number; days: number }>>>;
 
 // Delay status. OpenSky has no schedules, so "late" means later than the flight's usual
 // time at this airport over the last 30 days. Bands follow the 15-minute on-time convention.
 type Rag = "green" | "amber" | "red" | "unknown";
 const RAG_COLORS: Record<Rag, string> = {
-  green: "#16a34a", amber: "#d97706", red: "#dc2626", unknown: "#8d939c",
+  green: c("rag-green"), amber: c("rag-amber"), red: c("rag-red"), unknown: c("rag-unknown"),
 };
 const ragOf = (delay: number | null): Rag =>
   delay == null ? "unknown" : delay < 15 ? "green" : delay < 45 ? "amber" : "red";
 const ragText = (a: Placed) =>
   a.delay_min == null ? "No usual time" : a.delay_min < -15 ? `Early ${Math.round(-a.delay_min)} min`
     : a.delay_min < 15 ? "On time" : `Late ${Math.round(a.delay_min)} min`;
-const OTHER_COLORS = { ground: "#c4c8cf", other: "#b3b8bf" };
+const OTHER_COLORS = { ground: c("ground"), other: c("other") };
 const markerColor = (a: Placed) =>
   a.dir === "inbound" || a.dir === "outbound" ? RAG_COLORS[a.rag] : OTHER_COLORS[a.dir];
 
@@ -232,7 +324,7 @@ function WindCompass({ wx, size = 64 }: { wx: Record<string, any>; size?: number
           <path d="M0,0 L10,5 L0,10 z" fill={INK} />
         </marker>
       </defs>
-      <circle cx={r} cy={r} r={r - 6} fill="#fff" stroke={RULE} />
+      <circle cx={r} cy={r} r={r - 6} fill={c("surface")} stroke={RULE} />
       {["N", "E", "S", "W"].map((c, i) => {
         const [x, y] = p((i * Math.PI) / 2, r - 3);
         return <text key={c} x={x} y={y} dy={3} textAnchor="middle" fontSize={7} fill={MUTED}>{c}</text>;
@@ -259,14 +351,14 @@ function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () =>
   );
   return (
     <div style={{
-      position: "absolute", top: 10, right: 10, width: 210, background: "rgba(255,255,255,0.94)",
+      position: "absolute", top: 10, right: 10, width: 210, background: c("panel"),
       border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, color: INK,
       boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span style={{ fontWeight: 600 }}>{wx.iata} weather</span>
         {cat && (
-          <span style={{ background: CATEGORY_COLORS[cat] ?? MUTED, color: "#fff", borderRadius: 4, padding: "0 5px", fontSize: 11, fontWeight: 600 }}>
+          <span style={{ background: CATEGORY_COLORS[cat] ?? MUTED, color: c("bg"), borderRadius: 4, padding: "0 5px", fontSize: 11, fontWeight: 600 }}>
             {cat}
           </span>
         )}
@@ -300,8 +392,8 @@ function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () =>
   );
 }
 
-function AirspaceMap({ lat, lon, wx, tracks, live }: {
-  lat: number; lon: number; wx: Record<string, any> | undefined; tracks: TrackLine[]; live: Placed[];
+function AirspaceMap({ lat, lon, wx, tracks, live, dark }: {
+  lat: number; lon: number; wx: Record<string, any> | undefined; tracks: TrackLine[]; live: Placed[]; dark: boolean;
 }) {
   const [zoom, setZoom] = useState(8);
   const [showWeather, setShowWeather] = useState(true);
@@ -319,9 +411,9 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
       if (ty < 0 || ty >= n) continue;
       const wxTile = ((tx % n) + n) % n;
       tiles.push({
-        key: `${zoom}/${tx}/${ty}`,
-        // Esri's light grey canvas needs no API key (CARTO's basemaps now do).
-        href: `https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/${zoom}/${ty}/${wxTile}`,
+        key: `${dark}/${zoom}/${tx}/${ty}`,
+        // Esri's grey canvases need no API key (CARTO's basemaps now do).
+        href: `https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_${dark ? "Dark" : "Light"}_Gray_Base/MapServer/tile/${zoom}/${ty}/${wxTile}`,
         x: tx * TILE - x0, y: ty * TILE - y0,
       });
     }
@@ -329,13 +421,13 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
   const pxPerKm = (TILE * n) / (40075.017 * Math.cos((lat * Math.PI) / 180));
   const catColor = wx?.flight_category ? CATEGORY_COLORS[wx.flight_category] : MUTED;
   const btn: CSSProperties = {
-    width: 28, height: 28, border: `1px solid ${RULE}`, background: "#fff", borderRadius: 6,
+    width: 28, height: 28, border: `1px solid ${RULE}`, background: c("surface"), borderRadius: 6,
     fontSize: 16, lineHeight: "24px", cursor: "pointer", color: INK,
   };
 
   return (
     <div style={{ position: "relative", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
-      <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} style={{ width: "100%", height: "auto", display: "block", background: "#eef1f4" }}>
+      <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} style={{ width: "100%", height: "auto", display: "block", background: c("map-bg") }}>
         {/* Half a pixel of overlap hides anti-aliasing seams between tiles. */}
         {tiles.map((t) => <image key={t.key} href={t.href} x={t.x} y={t.y} width={TILE + 0.5} height={TILE + 0.5} />)}
         <circle cx={MAP_W / 2} cy={MAP_H / 2} r={TERMINAL_KM * pxPerKm} fill="none" stroke={INK} strokeOpacity={0.35} strokeDasharray="6 5" />
@@ -356,7 +448,7 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
           return (
             <g key={a.icao24} transform={`translate(${x.toFixed(1)},${y.toFixed(1)})`}>
               <path d="M0,-8 L5.5,6 L0,3 L-5.5,6 Z" transform={`rotate(${N(a.track_deg)}) scale(${tracked ? 1.15 : 0.9})`}
-                fill={markerColor(a)} stroke="#fff" strokeWidth={0.8} />
+                fill={markerColor(a)} stroke={c("halo")} strokeWidth={0.8} />
               {(tracked || zoom >= 9) && zoom >= 8 && (
                 <text x={9} y={4} fontSize={10} fill={tracked ? markerColor(a) : MUTED}>{label}</text>
               )}
@@ -372,7 +464,7 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
             </g>
           );
         })}
-        <circle cx={MAP_W / 2} cy={MAP_H / 2} r={9} fill={catColor} stroke="#fff" strokeWidth={2.5}>
+        <circle cx={MAP_W / 2} cy={MAP_H / 2} r={9} fill={catColor} stroke={c("halo")} strokeWidth={2.5}>
           <title>{`${wx?.flight_category ?? "No current category"} · ${wx ? windText(wx) : ""}`}</title>
         </circle>
       </svg>
@@ -388,7 +480,7 @@ function AirspaceMap({ lat, lon, wx, tracks, live }: {
             {wx.iata} weather
           </button>
         ))}
-      <div style={{ position: "absolute", right: 6, bottom: 4, fontSize: 10, color: MUTED, background: "rgba(255,255,255,0.8)", padding: "0 4px" }}>
+      <div style={{ position: "absolute", right: 6, bottom: 4, fontSize: 10, color: MUTED, background: c("panel-faint"), padding: "0 4px" }}>
         Esri, HERE, Garmin, © OpenStreetMap contributors
       </div>
     </div>
@@ -416,7 +508,7 @@ function NotamList({ rows }: { rows: Record<string, any>[] }) {
       <select
         value={category}
         onChange={(e) => setCategory(e.target.value)}
-        style={{ fontSize: 13, padding: "3px 6px", border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 8 }}
+        style={{ fontSize: 13, padding: "3px 6px", border: `1px solid ${RULE}`, borderRadius: 6, marginBottom: 8, background: c("surface"), color: INK }}
       >
         <option value="all">All categories ({rows.length})</option>
         {counts.map(([c, n]) => <option key={c} value={c}>{humanize(c)} ({n})</option>)}
@@ -449,8 +541,161 @@ const th: CSSProperties = {
 };
 const td: CSSProperties = { padding: "6px 12px 6px 0", borderBottom: `1px solid ${RULE}` };
 const num: CSSProperties = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
+const tooltipProps = {
+  contentStyle: { background: c("surface"), border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12 },
+  labelStyle: { color: INK },
+  cursor: { fill: RULE, stroke: RULE },
+};
+
+// ---- Arrivals / departures boards: past few hours and coming up ------------------------
+// There is no live schedule, so the boards are assembled from what the live feed showed
+// earlier this visit (landed, or gone out of range) and each regular flight's usual time.
+// Flights on the feed now are in the En route table instead.
+const PAST_HOURS = 3;
+const NEXT_HOURS = 6;
+const PAST_SHOWN = 5; // latest past flights shown before "Show all"
+const REGULAR_DAYS = 7; // seen on at least this many of the last 14 days
+const TERMINAL_NM = TERMINAL_KM / 1.852;
+
+// A recognised flight on the live feed, with its direction settled (on-ground aircraft
+// are assigned one from their usual times).
+type BoardLive = {
+  callsign: string; dir: Dir; label: string; flight_iata: string | null; other: string | null; usual: string | null;
+  on_ground: boolean; dist_nm: number; event_at: Date | null; rag: Rag; status_note: string | null;
+  aircraft: Placed;
+};
+// What the feed showed of a flight this visit.
+type Remembered = BoardLive & { last_at: Date; gone_at: Date | null; landed_at: Date | null };
+
+function useFeedMemory(icao: string, rows: BoardLive[], at: Date | null) {
+  const [memory, setMemory] = useState<Map<string, Remembered>>(() => new Map());
+  useEffect(() => setMemory(new Map()), [icao]);
+  useEffect(() => {
+    if (!at) return;
+    setMemory((prev) => {
+      const next = new Map(prev);
+      for (const r of rows) {
+        const old = next.get(r.callsign);
+        // Airborne inbound at the last fix, on the ground here now: it landed in between.
+        const landed_at = r.dir === "inbound" && r.on_ground && old && !old.on_ground ? at : old?.landed_at ?? null;
+        next.set(r.callsign, { ...r, last_at: at, gone_at: null, landed_at });
+      }
+      // Not in this fix: it left the feed (landed and shut down, or out of range).
+      for (const [k, m] of next) if (m.last_at < at && !m.gone_at) next.set(k, { ...m, gone_at: at });
+      return next;
+    });
+  }, [at, rows]);
+  return memory;
+}
+
+type BoardRow = {
+  key: string; phase: "past" | "next"; sort: number; time: string; flight_iata: string | null; callsign: string;
+  other: string | null; status: string; usual: string | null;
+};
+
+function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>, history: History,
+  now: Date, tz: string, flightIata: (c: string) => string | null): BoardRow[] {
+  const at = (d: Date) => clockParts(d, tz).time.slice(0, 5);
+  const out: BoardRow[] = [];
+  // Flights on the feed now belong to En route, not the board.
+  const placed = new Set(rows.map((r) => r.callsign));
+  const add = (r: Omit<BoardRow, "key">) => { placed.add(r.callsign); out.push({ ...r, key: `${r.phase}|${r.callsign}` }); };
+  const arriving = dir === "inbound";
+
+  // Past: seen this visit, then gone. Inbound flights count as landed only if they were on
+  // the ground or inside the terminal area when they went; further out it is a coverage gap.
+  const cutoff = now.getTime() - PAST_HOURS * 3_600_000;
+  for (const m of memory.values()) {
+    if (m.dir !== dir || !m.gone_at || placed.has(m.callsign)) continue;
+    if (arriving && !m.on_ground && m.dist_nm > TERMINAL_NM) continue;
+    if (!arriving && m.on_ground) continue; // switched off at the stand
+    const when = arriving ? (m.landed_at ?? m.event_at ?? m.gone_at) : (m.event_at ?? m.gone_at);
+    if (when.getTime() < cutoff) continue;
+    add({
+      phase: "past", flight_iata: m.flight_iata, callsign: m.callsign, other: m.other, usual: m.usual,
+      sort: when.getTime(), time: `~${at(when)}`,
+      status: arriving ? "Landed" : `Departed, ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
+    });
+  }
+
+  // Not seen this visit: regular flights by their usual time.
+  const nowMin = minuteOfDay(now, tz);
+  for (const [callsign, h] of history) {
+    const seen = h[dir];
+    if (!seen || seen.days < REGULAR_DAYS || placed.has(callsign)) continue;
+    const delta = wrapMinutes(seen.usual - nowMin);
+    if (delta < -PAST_HOURS * 60 || delta > NEXT_HOURS * 60) continue;
+    const when = new Date(now.getTime() + delta * 60_000);
+    add({
+      phase: delta < 0 ? "past" : "next", flight_iata: flightIata(callsign), callsign,
+      other: seen.other, usual: hhmm(seen.usual), sort: when.getTime(), time: at(when),
+      status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}, not seen live`
+        : arriving ? "Expected, not yet within 500 NM" : "Expected",
+    });
+  }
+  return out.sort((a, b) => a.sort - b.sort);
+}
+
+// Past flights greyed out and trimmed to the latest few; coming up in full, since that is
+// what most readers want.
+function Board({ rows, dir, iata }: { rows: BoardRow[]; dir: Dir; iata: string }) {
+  const [allPast, setAllPast] = useState(false);
+  const past = rows.filter((r) => r.phase === "past");
+  const next = rows.filter((r) => r.phase === "next");
+  const shownPast = allPast ? past : past.slice(-PAST_SHOWN);
+  const head = (title: string, extra?: ReactNode) => (
+    <tr>
+      <td colSpan={4} style={{ ...td, paddingTop: 14, fontSize: 12, fontWeight: 600, color: MUTED }}>
+        {title}{extra}
+      </td>
+    </tr>
+  );
+  const row = (r: BoardRow, greyed: boolean) => {
+    const cell = (style: CSSProperties): CSSProperties => (greyed ? { ...style, color: MUTED } : style);
+    return (
+      <tr key={r.key}>
+        <td style={cell({ ...num, textAlign: "left", fontWeight: 600 })}>{r.time}</td>
+        <td style={cell({ ...td, fontWeight: 600 })}><FlightCode iata={r.flight_iata} callsign={r.callsign} /></td>
+        <td style={cell(td)}>{r.other ?? "–"}</td>
+        <td style={cell(td)}>{r.status}</td>
+      </tr>
+    );
+  };
+  const none = <tr><td colSpan={4} style={{ ...td, color: MUTED }}>None</td></tr>;
+  return (
+    <div style={{ maxHeight: 640, overflowY: "auto" }}>
+      <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
+        <thead style={{ position: "sticky", top: 0, background: c("bg"), zIndex: 1 }}>
+          <tr>
+            <th style={th}>{iata} local</th>
+            <th style={th}>Flight</th>
+            <th style={th}>{dir === "inbound" ? "From" : "To"}</th>
+            <th style={th}>Status</th>
+          </tr>
+        </thead>
+        <tbody style={{ opacity: 0.6 }}>
+          {head(`Past ${PAST_HOURS} hours`, past.length > PAST_SHOWN && (
+            <>
+              {` (${allPast ? past.length : `latest ${PAST_SHOWN} of ${past.length}`}) `}
+              <button onClick={() => setAllPast(!allPast)}
+                style={{ border: "none", background: "none", padding: 0, cursor: "pointer", color: BLUE, fontSize: 12, fontFamily: "inherit" }}>
+                {allPast ? "Show fewer" : "Show all"}
+              </button>
+            </>
+          ))}
+          {shownPast.length === 0 ? none : shownPast.map((r) => row(r, true))}
+        </tbody>
+        <tbody>
+          {head(`Next ${NEXT_HOURS} hours (${next.length})`)}
+          {next.length === 0 ? none : next.map((r) => row(r, false))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 export default function AirportConditions() {
+  const theme = useTheme();
   // Airports, busiest first.
   const airportsQ = useSQLQuery(`
     select a.icao, a.iata, a.name, a.timezone, a.notam_source, count(f.flight_id) as arrivals
@@ -600,8 +845,9 @@ export default function AirportConditions() {
     select
       strftime(day_local, '%d %b %Y')                         as day,
       strftime(arrived_at at time zone '${tz}', '%H:%M')      as arrived,
-      coalesce(flight_number_iata, callsign, icao24)          as flight,
+      flight_number_iata,
       callsign,
+      icao24,
       airline_name,
       coalesce(departure_iata, departure_icao)                as origin,
       departure_icao,
@@ -610,13 +856,15 @@ export default function AirportConditions() {
       excess_terminal_minutes
     from a
     where day_local = (select max(day_local) from a)
-    order by arrived_at
+    order by arrived_at desc
   `, ready);
 
   const worstQ = useSQLQuery(`
     select
       strftime(arrived_at at time zone '${tz}', '%d %b %H:%M') as arrived,
-      coalesce(flight_number_iata, trim(callsign), icao24) as flight,
+      flight_number_iata,
+      trim(callsign) as callsign,
+      icao24,
       coalesce(departure_iata, departure_icao) as origin,
       terminal_minutes,
       excess_terminal_minutes,
@@ -653,8 +901,9 @@ export default function AirportConditions() {
     select
       strftime(day_local, '%d %b %Y')                         as day,
       strftime(departed_at at time zone '${tz}', '%H:%M')     as departed,
-      coalesce(flight_number_iata, callsign, icao24)          as flight,
+      flight_number_iata,
       callsign,
+      icao24,
       airline_name,
       coalesce(arrival_iata, arrival_icao)                    as destination,
       arrival_icao,
@@ -663,7 +912,7 @@ export default function AirportConditions() {
       excess_departure_minutes
     from d
     where day_local = (select max(day_local) from d)
-    order by departed_at
+    order by departed_at desc
   `, ready);
 
   // Callsigns seen arriving at / departing from this airport in the last 30 days, with
@@ -672,6 +921,8 @@ export default function AirportConditions() {
   //
   // usual_min is the flight's usual local time of day (minutes after midnight): the median
   // offset from its first observed time, wrapped so flights around midnight average right.
+  // days_14 is how many of the last 14 local days it was seen: the board only predicts
+  // flights that operate most days.
   const historyQ = useSQLQuery(`
     with seen as (
       select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other, arrived_at as seen_at
@@ -692,7 +943,9 @@ export default function AirportConditions() {
     select
       callsign, dir, mode(other) as other, count(*) as n,
       (((any_value(ref) + median(((((m - ref + 720) % 1440) + 1440) % 1440) - 720)) % 1440) + 1440) % 1440
-        as usual_min
+        as usual_min,
+      count(distinct cast(seen_at at time zone '${tz}' as date)) filter (where seen_at >= now() - interval 14 day)
+        as days_14
     from timed
     group by callsign, dir
   `, ready);
@@ -702,10 +955,10 @@ export default function AirportConditions() {
     () => new Map(rowsOf(airlinesQ.data).map((r) => [String(r.icao), String(r.iata)])),
     [airlinesQ.data],
   );
-  // QFA627 -> QF627, as stg_opensky_flights does; other callsigns are shown as they are.
-  const flightNumber = (callsign: string | null) => {
+  // QFA627 -> QF627, as stg_opensky_flights does; null for callsigns that do not map.
+  const flightIata = (callsign: string | null) => {
     const m = callsign ? /^([A-Z]{3})0*(\d{1,4})$/.exec(callsign) : null;
-    return m && airlineIata.has(m[1]) ? `${airlineIata.get(m[1])}${m[2]}` : callsign ?? "";
+    return m && airlineIata.has(m[1]) ? `${airlineIata.get(m[1])}${m[2]}` : null;
   };
   const tracks = useMemo(() => {
     const lines = new Map<string, TrackLine>();
@@ -724,16 +977,19 @@ export default function AirportConditions() {
   const kpi = rowsOf(kpiQ.data)[0];
   const depKpi = rowsOf(depKpiQ.data)[0];
 
+  const history = useMemo(() => {
+    const m: History = new Map();
+    for (const r of rowsOf(historyQ.data)) {
+      const h = m.get(r.callsign) ?? {};
+      h[r.dir as Dir] = { other: r.other ?? null, usual: N(r.usual_min), days: N(r.days_14) };
+      m.set(r.callsign, h);
+    }
+    return m;
+  }, [historyQ.data]);
+
   const placed = useMemo((): Placed[] => {
     if (!wx) return [];
     const aLat = N(wx.lat), aLon = N(wx.lon);
-    type Seen = { other: string | null; usual: number };
-    const history = new Map<string, { inbound?: Seen; outbound?: Seen }>();
-    for (const r of rowsOf(historyQ.data)) {
-      const h = history.get(r.callsign) ?? {};
-      h[r.dir as "inbound" | "outbound"] = { other: r.other ?? null, usual: N(r.usual_min) };
-      history.set(r.callsign, h);
-    }
     const now = live.at ?? new Date();
     // Median minutes inside 50 NM at this airport over 30 days; fallbacks until data builds up.
     const terminalArrMin = kpi?.median_terminal != null ? N(kpi.median_terminal) : 15;
@@ -769,20 +1025,65 @@ export default function AirportConditions() {
       return {
         ...a, dir,
         other: seen?.other ?? null,
-        label: flightNumber(a.callsign) || a.icao24,
+        flight_iata: flightIata(a.callsign),
+        label: flightIata(a.callsign) ?? a.callsign ?? a.icao24,
         dist_nm: km / 1.852,
         eta_min,
         usual: seen ? hhmm(seen.usual) : null,
         delay_min,
         rag: ragOf(delay_min),
+        event_at: dir === "inbound" || dir === "outbound" ? at : null,
       };
     });
-  }, [live.aircraft, live.at, historyQ.data, wx, airlineIata, tz, kpi, depKpi]);
-  const enRoute = placed
-    .filter((a) => a.dir === "inbound" || a.dir === "outbound")
-    .sort((a, b) => (a.dir === b.dir ? (a.eta_min ?? a.dist_nm) - (b.eta_min ?? b.dist_nm) : a.dir === "inbound" ? -1 : 1));
+  }, [live.aircraft, live.at, history, wx, airlineIata, tz, kpi, depKpi]);
   const count = (dir: Placed["dir"]) => placed.filter((a) => a.dir === dir).length;
-  const ragCount = (rag: Rag) => enRoute.filter((a) => a.rag === rag).length;
+
+  // Recognised flights on the feed, for the boards. An aircraft on the ground here is the
+  // arrival or departure whose usual time is nearest now: arrivals up to 3 h after their
+  // usual time (taxiing in, parked with the transponder on), departures within 3 h of theirs.
+  const boardLive = useMemo((): BoardLive[] => {
+    const nowMin = minuteOfDay(live.at ?? new Date(), tz);
+    const rows: BoardLive[] = [];
+    for (const a of placed) {
+      if (!a.callsign) continue;
+      const base = { callsign: a.callsign, label: a.label, flight_iata: a.flight_iata, on_ground: a.on_ground, dist_nm: a.dist_nm, aircraft: a };
+      if (a.dir === "inbound" || a.dir === "outbound") {
+        rows.push({ ...base, dir: a.dir, other: a.other, usual: a.usual, event_at: a.event_at, rag: a.rag,
+          status_note: a.dir === "inbound" || a.delay_min != null ? ragText(a) : null });
+        continue;
+      }
+      if (a.dir !== "ground") continue;
+      const h = history.get(a.callsign);
+      const arr = h?.inbound ? wrapMinutes(nowMin - h.inbound.usual) : null;   // minutes since usual arrival
+      const dep = h?.outbound ? wrapMinutes(h.outbound.usual - nowMin) : null; // minutes to usual departure
+      const arrOk = arr != null && arr >= -30 && arr <= PAST_HOURS * 60;
+      const depOk = dep != null && dep >= -PAST_HOURS * 60 && dep <= PAST_HOURS * 60;
+      const dir: Dir | null = arrOk && (!depOk || Math.abs(arr!) <= Math.abs(dep!)) ? "inbound" : depOk ? "outbound" : null;
+      if (!dir) continue;
+      const seen = h![dir]!;
+      // A departure still on the ground after its usual time is running late.
+      const late = dir === "outbound" && dep! < 0 ? -dep! : null;
+      rows.push({ ...base, dir, other: seen.other, usual: hhmm(seen.usual), event_at: null,
+        rag: dir === "outbound" ? ragOf(late ?? 0) : "unknown",
+        status_note: late != null && late >= 15 ? `Late ${Math.round(late)} min` : null });
+    }
+    return rows;
+  }, [placed, history, live.at, tz]);
+  const memory = useFeedMemory(icao, boardLive, live.at);
+  // En route: every recognised flight on the feed. Inbound first, nearest ETA first, then
+  // those landed and on the ground; outbound waiting on the ground, then airborne, nearest first.
+  const enRouteOrder = (r: BoardLive) =>
+    r.dir === "inbound" ? (r.on_ground ? 1e6 : r.aircraft.eta_min ?? r.dist_nm) : 2e6 + (r.on_ground ? 0 : 1 + r.dist_nm);
+  const enRoute = [...boardLive].sort((a, b) => enRouteOrder(a) - enRouteOrder(b));
+  const ragCount = (rag: Rag) => enRoute.filter((r) => !(r.dir === "inbound" && r.on_ground) && r.rag === rag).length;
+  const boards = useMemo(() => {
+    const now = live.at ?? new Date();
+    return {
+      inbound: buildBoard("inbound", boardLive, memory, history, now, tz, flightIata),
+      outbound: buildBoard("outbound", boardLive, memory, history, now, tz, flightIata),
+    };
+    // flightIata only changes with airlineIata.
+  }, [boardLive, memory, history, live.at, tz, airlineIata]);
 
   const hourly = useMemo(
     () => rowsOf(hourlyQ.data).map((r) => ({
@@ -805,14 +1106,24 @@ export default function AirportConditions() {
   const arrivals = rowsOf(arrivalsQ.data);
   const departures = rowsOf(departuresQ.data);
 
-  const page: CSSProperties = { fontFamily: SANS, color: INK, padding: 24, maxWidth: 1100 };
+  const page: CSSProperties = { fontFamily: SANS, color: INK, background: c("bg"), padding: 24, maxWidth: 1100 };
+  const frame = (body: ReactNode) => (
+    <div className="airport-conditions" data-theme={theme.dark ? "dark" : "light"} style={page}>
+      <style>{THEME_CSS}</style>
+      {body}
+    </div>
+  );
   const intro = (
     <>
-      <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
+        <ThemeSwitch mode={theme.mode} onChange={theme.setMode} />
+      </div>
       <p style={{ fontSize: 13, color: MUTED, margin: "4px 0 0" }}>
         Weather, observed traffic and excess terminal-area time (minutes within 50 NM beyond the
         airport's rolling median). Flight and chart times are the selected airport's local time;
-        METAR and TAF times are UTC (Z); daily movement counts use UTC days.
+        METAR and TAF times are UTC (Z); daily movement counts use UTC days. Flights without an
+        IATA flight number show their ATC callsign, muted.
       </p>
 
       <Clocks zones={[
@@ -843,7 +1154,7 @@ export default function AirportConditions() {
                 <tr
                   key={r.icao}
                   onClick={() => setPicked(r.iata)}
-                  style={{ cursor: "pointer", background: r.icao === icao ? "#f3f4f6" : undefined }}
+                  style={{ cursor: "pointer", background: r.icao === icao ? c("row-active") : undefined }}
                 >
                   <td style={{ ...td, fontWeight: r.icao === icao ? 600 : 400 }} title={r.icao}>{r.iata}</td>
                   <td style={num}>{N(r.hours)}</td>
@@ -863,8 +1174,8 @@ export default function AirportConditions() {
   // Every per-airport section waits for the airport list, so without it they would sit on
   // skeletons forever. Say why instead.
   if (airportsQ.isError || (!airportsQ.isLoading && airports.length === 0)) {
-    return (
-      <div style={page}>
+    return frame(
+      <>
         {intro}
         <Section title="Airport detail">
           <Empty>
@@ -873,19 +1184,19 @@ export default function AirportConditions() {
               : "No airports in reference.airports. Run dbt seed."}
           </Empty>
         </Section>
-      </div>
+      </>,
     );
   }
 
-  return (
-    <div style={page}>
+  return frame(
+    <>
       {intro}
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 40 }}>
         <select
           value={iata}
           onChange={(e) => setPicked(e.target.value)}
-          style={{ fontSize: 15, fontWeight: 600, padding: "4px 8px", border: `1px solid ${RULE}`, borderRadius: 6 }}
+          style={{ fontSize: 15, fontWeight: 600, padding: "4px 8px", border: `1px solid ${RULE}`, borderRadius: 6, background: c("surface"), color: INK }}
         >
           {airports.map((a) => (
             <option key={a.icao} value={a.iata}>{a.iata}</option>
@@ -956,6 +1267,7 @@ export default function AirportConditions() {
             wx={wx}
             tracks={tracks}
             live={placed}
+            dark={theme.dark}
           />
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
@@ -970,14 +1282,14 @@ export default function AirportConditions() {
 
       <Section
         title="En route"
-        note="Airborne flights within 500 NM that use this airport. OpenSky has no schedules, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards). Inbound / outbound comes from the same 30 days of callsigns."
+        note="Flights within 500 NM that use this airport, in the air or on the ground here: what is happening now, between the past and coming-up flights on the boards below. OpenSky has no schedules, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
       >
         {!live.at ? <Skeleton h={160} /> : enRoute.length === 0 ? (
           <Empty>{live.error ? "No live positions." : `No inbound or outbound flights for ${iata} recognised right now.`}</Empty>
         ) : (
-          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+          <div style={{ maxHeight: 420, overflowY: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
-              <thead style={{ position: "sticky", top: 0, background: "#ffffff" }}>
+              <thead style={{ position: "sticky", top: 0, background: c("bg") }}>
                 <tr>
                   <th style={th}>Status</th>
                   <th style={th}>Flight</th>
@@ -986,35 +1298,58 @@ export default function AirportConditions() {
                   <th style={{ ...th, textAlign: "right" }}>Altitude</th>
                   <th style={{ ...th, textAlign: "right" }}>Speed</th>
                   <th style={{ ...th, textAlign: "right" }}>Usual</th>
-                  <th style={{ ...th, textAlign: "right" }}>ETA ({iata} local)</th>
+                  <th style={{ ...th, textAlign: "right" }}>{iata} local</th>
                 </tr>
               </thead>
               <tbody>
-                {enRoute.map((a) => (
-                  <tr key={a.icao24}>
-                    <td style={td}>
-                      <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: RAG_COLORS[a.rag], marginRight: 6 }} />
-                      <span style={{ color: RAG_COLORS[a.rag], fontWeight: 600 }}>{ragText(a)}</span>
-                    </td>
-                    <td style={{ ...td, fontWeight: 600 }} title={a.callsign ?? undefined}>{a.label}</td>
-                    <td style={td}>{a.dir === "inbound" ? `${a.other ?? "?"} → ${iata}` : `${iata} → ${a.other ?? "?"}`}</td>
-                    <td style={num}>{Math.round(a.dist_nm)} NM</td>
-                    <td style={num}>{a.alt_ft.toLocaleString()} ft</td>
-                    <td style={num}>{a.speed_kt == null ? "–" : `${a.speed_kt} kt`}</td>
-                    <td style={{ ...num, color: MUTED }} title={a.dir === "inbound" ? "Usual arrival" : "Usual departure"}>{a.usual ?? "–"}</td>
-                    <td style={num}>
-                      {a.eta_min == null || !live.at ? "–"
-                        : `${clockParts(new Date(live.at.getTime() + a.eta_min * 60_000), tz).time.slice(0, 5)} (${Math.round(a.eta_min)} min)`}
-                    </td>
-                  </tr>
-                ))}
+                {enRoute.map((r) => {
+                  const a = r.aircraft;
+                  const inbound = r.dir === "inbound";
+                  const landed = inbound && r.on_ground;
+                  const color = landed ? INK : RAG_COLORS[r.rag];
+                  const landedAt = memory.get(r.callsign)?.landed_at;
+                  const hm = (d: Date) => clockParts(d, tz).time.slice(0, 5);
+                  return (
+                    <tr key={a.icao24}>
+                      <td style={td}>
+                        <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: landed ? MUTED : color, marginRight: 6 }} />
+                        <span style={{ color, fontWeight: 600 }}>
+                          {landed ? "Landed, on the ground"
+                            : r.on_ground ? `On the ground${r.status_note ? ` · ${r.status_note}` : ""}`
+                            : ragText(a)}
+                        </span>
+                      </td>
+                      <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} icao24={a.icao24} /></td>
+                      <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
+                      <td style={num}>{Math.round(r.dist_nm)} NM</td>
+                      <td style={num}>{r.on_ground ? "Ground" : `${a.alt_ft.toLocaleString()} ft`}</td>
+                      <td style={num}>{a.speed_kt == null ? "–" : `${a.speed_kt} kt`}</td>
+                      <td style={{ ...num, color: MUTED }} title={inbound ? "Usual arrival" : "Usual departure"}>{r.usual ?? "–"}</td>
+                      <td style={num}>
+                        {landed ? (landedAt ? `Landed ~${hm(landedAt)}` : "–")
+                          : r.on_ground || !r.event_at ? "–"
+                          : inbound ? `ETA ${hm(r.event_at)} (${Math.round(a.eta_min ?? 0)} min)`
+                          : `Took off ~${hm(r.event_at)}`}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
-          {count("inbound")} inbound, {count("outbound")} outbound: {ragCount("green")} on time, {ragCount("amber")} amber, {ragCount("red")} red, {ragCount("unknown")} unknown. Flights that have not used {iata} in the last 30 days show as other traffic.
+          {enRoute.filter((r) => r.dir === "inbound" && !r.on_ground).length} inbound, {enRoute.filter((r) => r.dir === "outbound" && !r.on_ground).length} outbound,{" "}
+          {enRoute.filter((r) => r.on_ground).length} on the ground here: {ragCount("green")} on time, {ragCount("amber")} amber, {ragCount("red")} red, {ragCount("unknown")} unknown. Flights that have not used {iata} in the last 30 days show as other traffic.
         </p>
+      </Section>
+
+      <Section title="Arrivals" note={`Before and after En route; there is no live schedule. Past (greyed) is arrivals the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Times are ${iata} local; ~ marks an estimate.`}>
+        {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.inbound} dir="inbound" iata={iata} />}
+      </Section>
+
+      <Section title="Departures" note={`Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Times are ${iata} local; ~ marks an estimate.`}>
+        {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.outbound} dir="outbound" iata={iata} />}
       </Section>
 
       <Section title="Arrivals, last 30 days">
@@ -1041,7 +1376,7 @@ export default function AirportConditions() {
                 <CartesianGrid stroke={RULE} vertical={false} />
                 <XAxis dataKey="label" tick={{ fontSize: 11, fill: MUTED }} interval="preserveStartEnd" minTickGap={40} />
                 <YAxis tick={{ fontSize: 11, fill: MUTED }} unit=" kt" />
-                <Tooltip />
+                <Tooltip {...tooltipProps} />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <Line type="monotone" dataKey="wind" name="Wind" stroke={BLUE} dot={false} strokeWidth={2} connectNulls />
                 <Line type="monotone" dataKey="gust" name="Gust" stroke={ORANGE} dot={{ r: 2 }} strokeWidth={0} />
@@ -1074,10 +1409,10 @@ export default function AirportConditions() {
               <CartesianGrid stroke={RULE} vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: MUTED }} />
               <YAxis tick={{ fontSize: 11, fill: MUTED }} allowDecimals={false} />
-              <Tooltip />
+              <Tooltip {...tooltipProps} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar dataKey="arrivals" name="Arrivals" fill={BLUE} />
-              <Bar dataKey="departures" name="Departures" fill="#93c5fd" />
+              <Bar dataKey="departures" name="Departures" fill={c("blue-soft")} />
             </BarChart>
           </ResponsiveContainer>
         )}
@@ -1120,16 +1455,19 @@ export default function AirportConditions() {
         )}
       </Section>
 
-      <Section
-        title={arrivals.length ? `All arrivals, ${arrivals[0].day} (${iata} local)` : "All arrivals"}
-        note="Every arrival OpenSky observed on the latest local day with data, from any origin. Terminal time only where the flight's track was fetched and well covered."
-      >
+      <details style={{ marginTop: 20 }}>
+        <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+          {arrivals.length ? `All arrivals, ${arrivals[0].day} (${iata} local)` : "All arrivals"}, with terminal time
+        </summary>
+        <p style={{ fontSize: 12, color: MUTED, margin: "4px 0 12px" }}>
+          Every arrival OpenSky observed on the latest local day with data, from any origin, latest first. Terminal time only where the flight's track was fetched and well covered.
+        </p>
         {arrivalsQ.isLoading ? <Skeleton h={200} /> : arrivals.length === 0 ? (
           <Empty>No OpenSky arrivals at {iata} yet.</Empty>
         ) : (
           <div style={{ maxHeight: 420, overflowY: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
-              <thead style={{ position: "sticky", top: 0, background: "#ffffff" }}>
+              <thead style={{ position: "sticky", top: 0, background: c("bg") }}>
                 <tr>
                   <th style={th}>Arrived</th>
                   <th style={th}>Flight</th>
@@ -1144,7 +1482,7 @@ export default function AirportConditions() {
                 {arrivals.map((r, i) => (
                   <tr key={i}>
                     <td style={td}>{r.arrived}</td>
-                    <td style={td} title={r.callsign ?? undefined}>{r.flight}</td>
+                    <td style={td}><FlightCode iata={r.flight_number_iata} callsign={r.callsign} icao24={r.icao24} /></td>
                     <td style={{ ...td, color: MUTED }}>{r.airline_name ?? ""}</td>
                     <td style={td} title={r.departure_icao ?? undefined}>{r.origin ?? "–"}</td>
                     <td style={{ ...td, color: r.flight_category ? CATEGORY_COLORS[r.flight_category] : MUTED }}>
@@ -1159,9 +1497,9 @@ export default function AirportConditions() {
           </div>
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
-          {arrivals.length} arrivals. Hover a flight for its ICAO callsign, an origin for its ICAO code.
+          {arrivals.length} arrivals. Muted flights have no IATA flight number and show their ATC callsign. Hover a flight for its callsign, an origin for its ICAO code.
         </p>
-      </Section>
+      </details>
 
       <Section title="Slowest arrivals, last 30 days" note="Most excess terminal-area time, with the weather when they landed.">
         {worstQ.isLoading ? <Skeleton h={200} /> : rowsOf(worstQ.data).length === 0 ? (
@@ -1184,7 +1522,7 @@ export default function AirportConditions() {
               {rowsOf(worstQ.data).map((r, i) => (
                 <tr key={i}>
                   <td style={td}>{r.arrived}</td>
-                  <td style={td}>{r.flight}</td>
+                  <td style={td}><FlightCode iata={r.flight_number_iata} callsign={r.callsign} icao24={r.icao24} /></td>
                   <td style={td}>{r.origin ?? "–"}</td>
                   <td style={num}>{N(r.terminal_minutes).toFixed(1)} min</td>
                   <td style={{ ...num, fontWeight: 600 }}>{mins(r.excess_terminal_minutes)}</td>
@@ -1215,10 +1553,13 @@ export default function AirportConditions() {
         </div>
       </Section>
 
-      <Section
-        title={departures.length ? `All departures, ${departures[0].day} (${iata} local)` : "All departures"}
-        note="Every departure OpenSky observed on the latest local day with data, to any destination. Terminal time only where the flight's track was fetched (tracks are fetched for flights landing at one of the five airports)."
-      >
+      <details style={{ marginTop: 20 }}>
+        <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+          {departures.length ? `All departures, ${departures[0].day} (${iata} local)` : "All departures"}, with terminal time
+        </summary>
+        <p style={{ fontSize: 12, color: MUTED, margin: "4px 0 12px" }}>
+          Every departure OpenSky observed on the latest local day with data, to any destination, latest first. Terminal time only where the flight's track was fetched (tracks are fetched for flights landing at one of the five airports).
+        </p>
         {departuresQ.isLoading ? <Skeleton h={200} /> : departuresQ.isError ? (
           <Empty>Could not load departures: {String(departuresQ.error?.message ?? departuresQ.error)}</Empty>
         ) : departures.length === 0 ? (
@@ -1226,7 +1567,7 @@ export default function AirportConditions() {
         ) : (
           <div style={{ maxHeight: 420, overflowY: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
-              <thead style={{ position: "sticky", top: 0, background: "#ffffff" }}>
+              <thead style={{ position: "sticky", top: 0, background: c("bg") }}>
                 <tr>
                   <th style={th}>Departed</th>
                   <th style={th}>Flight</th>
@@ -1241,7 +1582,7 @@ export default function AirportConditions() {
                 {departures.map((r, i) => (
                   <tr key={i}>
                     <td style={td}>{r.departed}</td>
-                    <td style={td} title={r.callsign ?? undefined}>{r.flight}</td>
+                    <td style={td}><FlightCode iata={r.flight_number_iata} callsign={r.callsign} icao24={r.icao24} /></td>
                     <td style={{ ...td, color: MUTED }}>{r.airline_name ?? ""}</td>
                     <td style={td} title={r.arrival_icao ?? undefined}>{r.destination ?? "–"}</td>
                     <td style={{ ...td, color: r.flight_category ? CATEGORY_COLORS[r.flight_category] : MUTED }}>
@@ -1256,9 +1597,9 @@ export default function AirportConditions() {
           </div>
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
-          {departures.length} departures. Hover a flight for its ICAO callsign, a destination for its ICAO code.
+          {departures.length} departures. Muted flights have no IATA flight number and show their ATC callsign. Hover a flight for its callsign, a destination for its ICAO code.
         </p>
-      </Section>
-    </div>
+      </details>
+    </>,
   );
 }

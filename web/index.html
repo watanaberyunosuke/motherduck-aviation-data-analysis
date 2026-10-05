@@ -11,7 +11,14 @@
 <style>
   /* The Dive is written for MotherDuck's host page: a white canvas with Tailwind. These
      are the only Tailwind classes it uses. */
-  html, body { margin: 0; background: #ffffff; }
+  html, body { margin: 0; }
+  /* The Dive themes itself; the page around it follows the Dive's data-theme (#121417
+     is the Dive's dark background), or the system before the Dive has mounted. */
+  html { background: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    html:not(:has([data-theme="light"])) { background: #121417; color-scheme: dark; }
+  }
+  html:has([data-theme="dark"]) { background: #121417; color-scheme: dark; }
   #root { margin: 0 auto; max-width: 1100px; overflow-x: auto; }
   .rounded { border-radius: 0.25rem; }
   .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
