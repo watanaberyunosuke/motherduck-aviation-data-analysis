@@ -16,7 +16,7 @@ export default defineConfig({
   },
   server: {
     fs: { allow: [".."] },
-    // `npm run dev` / `npm run preview` expect the API on :8000 (see README).
+    // `yarn dev` / `yarn preview` expect the API on :8000 (see README).
     proxy: { "/api": "http://127.0.0.1:8000" },
   },
   preview: { proxy: { "/api": "http://127.0.0.1:8000" } },
