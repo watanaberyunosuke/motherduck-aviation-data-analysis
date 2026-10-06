@@ -18,6 +18,7 @@ ingest-weather:
 	aviation ingest metar
 	aviation ingest taf
 	aviation ingest wx-extra
+	aviation ingest atis-hk
 
 ingest-notams:
 	aviation ingest notam

@@ -60,6 +60,18 @@ create table if not exists raw.sun_times (
     primary key (icao, day)
 );
 
+-- Each distinct ATIS broadcast text once (sources/atis_hk.py), with when it was first and
+-- last seen on the page.
+create table if not exists raw.atis (
+    icao          varchar not null,
+    text_hash     varchar not null,
+    info_letter   varchar,
+    text          varchar not null,
+    first_seen_at timestamptz not null,
+    last_seen_at  timestamptz not null,
+    primary key (icao, text_hash)
+);
+
 create table if not exists raw.notam (
     source         varchar not null,  -- hk_cad | rapidapi
     notam_key      varchar not null,  -- source-stable id, e.g. VHHK:A2255/26

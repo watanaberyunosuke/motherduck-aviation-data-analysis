@@ -192,6 +192,9 @@ def built(tmp_path_factory):
         "payload": {"icaoId": "YSSY", "obsTime": int(now.timestamp()) - 600, "temp": 15.0,
                     "dewp": 9.0, "wxString": None, "rawOb": "SYNTHETIC FRESH"}}],
         ["icao", "obs_time"])
+    warehouse.upsert(con, "raw.atis", [{
+        "icao": "VHHH", "text_hash": "h1", "info_letter": "B", "text": "SYNTHETIC ATIS INFORMATION B",
+        "first_seen_at": now, "last_seen_at": now}], ["icao", "text_hash"])
     warehouse.upsert(con, "raw.sun_times", [{
         "icao": "YMML", "day": now.astimezone(ZoneInfo("Australia/Melbourne")).date(),
         "source": "computed", "sunrise": now.replace(hour=20, minute=5, second=0, microsecond=0),
@@ -338,6 +341,13 @@ def test_conditions_fall_back_to_outside_weather_only_when_metar_is_stale(built)
     assert rows["YSSY"][1:7] == (15.0, "metar", 9.0, "metar", None, None)
     # Nothing outside for EHAM: no source is claimed unless the METAR really had a value.
     assert rows["EHAM"][2] in (None, "metar") and rows["EHAM"][5] is None
+
+
+def test_atis_only_for_the_airport_that_has_one(built):
+    con, _ = built
+    rows = dict(con.execute("""select icao, atis_letter || ': ' || atis_text
+                               from marts.fct_airport_conditions where atis_text is not null""").fetchall())
+    assert rows == {"VHHH": "B: SYNTHETIC ATIS INFORMATION B"}
 
 
 def test_terminal_tracks_stay_near_the_airport(built):

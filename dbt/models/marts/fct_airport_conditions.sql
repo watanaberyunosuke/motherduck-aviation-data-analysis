@@ -38,6 +38,14 @@ extra as (
     group by icao
 ),
 
+-- The ATIS text last seen within three hours (Hong Kong only).
+latest_atis as (
+    select icao, info_letter, text, last_seen_at
+    from {{ source('raw', 'atis') }}
+    where last_seen_at >= now() - interval 3 hour
+    qualify row_number() over (partition by icao order by last_seen_at desc) = 1
+),
+
 notams as (
     select location, count(*) as n
     from {{ ref('fct_notams') }}
@@ -90,6 +98,9 @@ select
     strftime(sun.sunset at time zone a.timezone, '%H:%M')                  as sunset_local,
     sun.source                                                             as sun_source,
     m.altimeter_hpa,
+    atis.info_letter              as atis_letter,
+    atis.text                     as atis_text,
+    atis.last_seen_at             as atis_seen_at,
     t.issued_at                   as taf_issued_at,
     t.valid_from                  as taf_valid_from,
     t.valid_to                    as taf_valid_to,
@@ -103,6 +114,7 @@ left join (select icao, observed_at >= now() - interval 2 hour as is_fresh from 
 left join extra e on e.icao = a.icao
 left join {{ source('raw', 'sun_times') }} sun
     on sun.icao = a.icao and sun.day = cast(now() at time zone a.timezone as date)
+left join latest_atis atis on atis.icao = a.icao
 left join latest_taf t on t.icao = a.icao
 left join notams n on n.location = a.icao
 left join notam_feeds f on f.source = a.notam_source

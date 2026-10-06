@@ -17,6 +17,7 @@ How much does weather and runway availability cost arriving flights at Sydney, M
 | METAR history, METAR fallback | [Iowa Environmental Mesonet archive](https://mesonet.agron.iastate.edu/request/download.phtml) | All seven | Free, no key | Only if AWC fails, or for history beyond 30 days |
 | Temperature, dew point, weather text (fallback) | National service ([HKO](https://data.gov.hk/en-data/dataset/hk-hko-rss-current-weather-report), [NEA](https://data.gov.sg/developer), [NWS](https://www.weather.gov/documentation/services-web-api)), then [Open-Meteo](https://open-meteo.com), then [MET Norway](https://api.met.no/weatherapi/documentation) | VHHH, WSSS, PANC have a national feed; all seven have the other two | Free, no key | Hourly; used only while the METAR is missing, stale (over 2 h) or lacks the field |
 | Sunrise, sunset | [MET Norway Sunrise API](https://api.met.no/weatherapi/sunrise/3.0/), else computed from the airport's coordinates | All seven | Free, no key | Hourly |
+| ATIS (Hong Kong) | [HKO/CAD Internet ATIS](https://atis.cad.gov.hk/ATIS/ATISweb/atis.php), page text | VHHH | Free, no key | Hourly |
 | NOTAMs (Hong Kong) | [HK CAD NOTAM website](https://www.notam.ais.gov.hk/), JSON at `/data` | VHHH, VHHK FIR | Free, official, no key | Every 3 h |
 | NOTAMs (US and international) | [FAA NOTAM Search](https://notams.aim.faa.gov/notamSearch/nsapp.html) (the website's backend) | WSSS, EHAM, PANC | Free, no key; unofficial interface | Every 3 h |
 | NOTAMs (AU) | None at present | YSSY, YMML, YBBN | See below | Not ingested |
@@ -116,7 +117,7 @@ select * from md_list_flight_runs(flight_id := '<id>') order by run_number desc 
 select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>);
 ```
 
-`SOURCES` takes space-separated sources (`metar taf wx-extra notam-hk notam-faa-search opensky aerodatabox`), or `none` for dbt only. Run on its own, `aerodatabox` fills only the days OpenSky returned empty.
+`SOURCES` takes space-separated sources (`metar taf wx-extra atis-hk notam-hk notam-faa-search opensky aerodatabox`), or `none` for dbt only. Run on its own, `aerodatabox` fills only the days OpenSky returned empty.
 
 ### Flight: `initial_load`
 
@@ -187,6 +188,8 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 
 ## 6. Known limitations
 
+- **ATIS (Hong Kong) is untested against the live page.** `atis_hk.py` reduces the page to text and stores each distinct text once (`raw.atis`); the page's markup was not available when it was written, so the information letter is read from "INFORMATION <letter>" if present and the rest is stored as is. On the first run check `raw.atis.text`: if it is navigation around the broadcast, or the page loads the broadcast by script, the fetch must target the page's data URL. The CAD site's terms were not read either. Only VHHH has an ATIS here.
+- **No SID/STAR charts.** Official SID/STAR charts are not shown: no free procedure data covers these airports. The observed arrival and departure paths on the map trace the procedures in use but are not the published procedures.
 - **Fallback weather is untested against the live APIs.** The hosts were unreachable from the development sandbox, so `wx_extra.py` parses the documented response shapes (`tests/test_wx_extra.py`). On the first real run check `raw.ingest_log` (source `wx_extra`) and `raw.wx_extra` for each airport. HKO is assumed to list the airport as "Chek Lap Kok" (`weather_station` in `config/airports.yml`; a wrong name is logged with the places HKO does list); NEA's v2 endpoint is assumed from its docs. HKO and NEA give temperature only, and the model sources are values for a grid point, not the airport's instruments.
 - **No NOTAMs for Australia or Singapore.** Only Hong Kong has a NOTAM feed, so runway closures cannot explain excess terminal time at YSSY, YMML, YBBN or WSSS. For those arrivals `surface_notam_in_force` and `runway_closure_in_force` are null (unknown), not false. Filter on `has_notam_feed` before comparing NOTAM effects across airports.
 - **SkyLink client is untested against live data.** If it is re-enabled, check on the first real call whether YSSY and WSSS NOTAMs arrive in ICAO format (the provider's example is FAA domestic format, with no Q-line) and spot-check completeness against NAIPS / AIM-SG. A response shape change raises `SchemaMismatch` rather than loading bad rows.

@@ -1515,6 +1515,14 @@ export default function AirportConditions() {
               {wx.taf_raw ? `TAF issued ${wx.taf_at}, valid ${wx.taf_from} to ${wx.taf_to}` : "TAF"}
             </div>
             <pre style={mono}>{wx.taf_raw ?? "No TAF for this airport yet."}</pre>
+            {wx.atis_text && (
+              <>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
+                  {`ATIS${wx.atis_letter ? ` information ${wx.atis_letter}` : ""}, Hong Kong CAD, last seen ${wx.atis_seen_at ? String(wx.atis_seen_at).slice(0, 16).replace("T", " ") + "Z" : "recently"}`}
+                </div>
+                <pre style={mono}>{wx.atis_text}</pre>
+              </>
+            )}
           </>
         )}
       </Section>
@@ -1540,7 +1548,7 @@ export default function AirportConditions() {
 
       <Section
         title="Airspace"
-        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Click an aircraft for its details. Zoom out to see en route traffic."
+        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Click an aircraft for its details. Zoom out to see en route traffic. Official SID/STAR charts are not shown: no free procedure data covers these airports."
       >
         {!wx ? <Skeleton h={400} /> : (
           <AirspaceMap
