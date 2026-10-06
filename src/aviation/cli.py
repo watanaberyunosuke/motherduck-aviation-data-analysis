@@ -46,7 +46,8 @@ def run(source: str, days: int | None = None, opensky_calls: int | None = None,
     if source in ("taf", "all"):
         attempt("taf", lambda: aviationweather.ingest_taf(con, settings.icao_codes, lookback))
     if source in ("wx-extra", "all"):
-        attempt("wx-extra", lambda: wx_extra.ingest(con, settings.icao_codes, settings.weather_gov))
+        attempt("wx-extra", lambda: wx_extra.ingest(con, settings.icao_codes, settings.weather_gov,
+                                                   settings.weather_stations))
     hk = settings.airports_for_notam_source("hk_cad")
     faa_search = settings.airports_for_notam_source("faa_search")
     faa = settings.airports_for_notam_source("faa")

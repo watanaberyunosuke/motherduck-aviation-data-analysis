@@ -42,9 +42,6 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 MET_NO_FORECAST_URL = "https://api.met.no/weatherapi/locationforecast/2.0/complete"
 MET_NO_SUN_URL = "https://api.met.no/weatherapi/sunrise/3.0/sun"
 
-# HKO lists temperature by place; this is the one at the airport.
-HKO_AIRPORT_PLACE = "Chek Lap Kok"
-
 # Open-Meteo's WMO weather_code, in METAR-ish words.
 WMO_TEXT = {
     0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog",
@@ -91,9 +88,18 @@ def _km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 # ---- parsers: one per source, payload in, {observed_at, temp_c, dewpoint_c, wx_text} out ----
 
-def parse_hko(payload: dict) -> dict | None:
+def hko_places(payload: dict) -> list[str]:
+    return [p["place"] for p in (payload.get("temperature") or {}).get("data") or []
+            if p.get("place")]
+
+
+def parse_hko(payload: dict, station: str | None) -> dict | None:
+    """Temperature at the named place (`weather_station` in config/airports.yml), matched
+    ignoring case and surrounding space."""
+    wanted = (station or "").strip().casefold()
     places = (payload.get("temperature") or {}).get("data") or []
-    hit = next((p for p in places if p.get("place") == HKO_AIRPORT_PLACE), None)
+    hit = next((p for p in places
+                if wanted and str(p.get("place", "")).strip().casefold() == wanted), None)
     temp = _num(hit.get("value")) if hit else None
     if temp is None:
         return None
@@ -172,11 +178,17 @@ def parse_met_no(payload: dict) -> dict | None:
 
 # ---- fetchers ----
 
-def fetch_gov(kind: str | None, icao: str, lat: float, lon: float) -> tuple[str, dict] | None:
-    """(raw payload, parsed) from the airport's national service, or None."""
+def fetch_gov(kind: str | None, icao: str, lat: float, lon: float,
+              station: str | None = None) -> tuple[str, dict] | None:
+    """(raw payload, parsed) from the airport's national service, or None. `station` names
+    the place to read where the service lists readings by name (HKO)."""
     if kind == "hko":
         raw = _get_json(HKO_URL, {"dataType": "rhrread", "lang": "en"})
-        parsed = parse_hko(raw)
+        parsed = parse_hko(raw, station)
+        if parsed is None:
+            log.warning("HKO has no temperature for station %r (weather_station in "
+                        "config/airports.yml); places listed: %s", station,
+                        ", ".join(hko_places(raw)) or "none")
     elif kind == "nea":
         raw = _get_json(NEA_URL)
         parsed = parse_nea(raw, lat, lon)
@@ -269,14 +281,15 @@ def _airports(con: duckdb.DuckDBPyConnection, icaos: list[str]) -> list[dict]:
              "timezone": rows[i]["timezone"]} for i in icaos]
 
 
-def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], gov: dict[str, str | None]) -> str:
+def ingest(con: duckdb.DuckDBPyConnection, icaos: list[str], gov: dict[str, str | None],
+           stations: dict[str, str | None] | None = None) -> str:
     """One row per source that answered, for each airport, plus today's sun times."""
     now = warehouse.utcnow()
     rows, sun_rows, failed = [], [], []
     for ap in _airports(con, icaos):
         icao, lat, lon = ap["icao"], ap["lat"], ap["lon"]
         attempts = [
-            ("gov", lambda: fetch_gov(gov.get(icao), icao, lat, lon)),
+            ("gov", lambda: fetch_gov(gov.get(icao), icao, lat, lon, (stations or {}).get(icao))),
             ("open-meteo", lambda: fetch_open_meteo(lat, lon)),
             ("met.no", lambda: fetch_met_no(lat, lon)),
         ]

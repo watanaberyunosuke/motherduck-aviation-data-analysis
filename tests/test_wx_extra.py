@@ -14,10 +14,29 @@ def test_hko_takes_the_airport_place_and_has_no_dew_point():
     payload = {"temperature": {"recordTime": "2026-10-06T18:00:00+08:00", "data": [
         {"place": "King's Park", "value": 24, "unit": "C"},
         {"place": "Chek Lap Kok", "value": 26, "unit": "C"}]}}
-    got = wx.parse_hko(payload)
+    got = wx.parse_hko(payload, "Chek Lap Kok")
     assert got["temp_c"] == 26 and got["dewpoint_c"] is None
+    assert wx.parse_hko(payload, " chek lap kok ")["temp_c"] == 26, "case and spacing ignored"
+    assert wx.parse_hko(payload, "Chep Lap Kok") is None and wx.parse_hko(payload, None) is None
+    assert wx.hko_places(payload) == ["King's Park", "Chek Lap Kok"]
     assert got["observed_at"] == datetime(2026, 10, 6, 10, tzinfo=timezone.utc)
-    assert wx.parse_hko({"temperature": {"data": [{"place": "King's Park", "value": 24}]}}) is None
+    assert wx.parse_hko({"temperature": {"data": [{"place": "King's Park", "value": 24}]}},
+                        "Chek Lap Kok") is None
+
+
+def test_hko_logs_the_places_it_lists_when_the_station_name_is_wrong(monkeypatch, caplog):
+    payload = {"temperature": {"data": [{"place": "King's Park", "value": 24},
+                                        {"place": "Chek Lap Kok", "value": 26}]}}
+    monkeypatch.setattr(wx, "_get_json", lambda *a, **k: payload)
+    with caplog.at_level("WARNING"):
+        assert wx.fetch_gov("hko", "VHHH", 22.3, 113.9, "Chep Lap Kok") is None
+    assert "Chep Lap Kok" in caplog.text and "King's Park, Chek Lap Kok" in caplog.text
+    assert wx.fetch_gov("hko", "VHHH", 22.3, 113.9, "Chek Lap Kok")[1]["temp_c"] == 26
+
+
+def test_config_names_the_hko_station():
+    from aviation.config import load_settings
+    assert load_settings().weather_stations["VHHH"] == "Chek Lap Kok"
 
 
 def test_nea_picks_the_nearest_station_with_a_reading():

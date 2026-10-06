@@ -12,7 +12,7 @@
 # shows the FAA copy is complete. Keep `notam_source` in dbt/seeds/airports.csv in step.
 # `weather_gov` names the national weather service wx_extra.py asks first for temperature
 # (and dew point, weather text where it has them) when the METAR is missing or stale:
-#   hko -> Hong Kong Observatory open data   nea -> Singapore NEA (data.gov.sg)
+#   hko -> Hong Kong Observatory open data (needs `weather_station`, its place name)   nea -> Singapore NEA (data.gov.sg)
 #   nws -> US National Weather Service       null -> straight to Open-Meteo, then MET Norway
 # Australia is null: the Bureau of Meteorology's terms bar passing its data on. The
 # Netherlands is null: KNMI serves NetCDF files behind a key, not worth the parser yet.
@@ -35,6 +35,7 @@ airports:
     name: Hong Kong International
     notam_source: hk_cad
     weather_gov: hko
+    weather_station: Chek Lap Kok  # HKO's place name for the airport; a wrong one is logged with the places HKO lists
   - icao: EHAM
     name: Amsterdam Schiphol
     notam_source: faa_search

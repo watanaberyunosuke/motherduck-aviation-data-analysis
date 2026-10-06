@@ -34,6 +34,7 @@ class Airport:
     name: str
     notam_source: str | None = None  # None: no NOTAM feed
     weather_gov: str | None = None  # hko | nea | nws; None: no national-service feed
+    weather_station: str | None = None  # place name to read where the service lists by name (hko)
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,10 @@ class Settings:
     @property
     def weather_gov(self) -> dict[str, str | None]:
         return {a.icao: a.weather_gov for a in self.airports}
+
+    @property
+    def weather_stations(self) -> dict[str, str | None]:
+        return {a.icao: a.weather_station for a in self.airports}
 
     def airports_for_notam_source(self, source: str) -> list[str]:
         return [a.icao for a in self.airports if a.notam_source == source]
