@@ -40,7 +40,7 @@ extra as (
 
 -- The ATIS text last seen within three hours (Hong Kong only).
 latest_atis as (
-    select icao, info_letter, text, last_seen_at
+    select icao, arrival_letter, departure_letter, text, last_seen_at
     from {{ source('raw', 'atis') }}
     where last_seen_at >= now() - interval 3 hour
     qualify row_number() over (partition by icao order by last_seen_at desc) = 1
@@ -98,7 +98,8 @@ select
     strftime(sun.sunset at time zone a.timezone, '%H:%M')                  as sunset_local,
     sun.source                                                             as sun_source,
     m.altimeter_hpa,
-    atis.info_letter              as atis_letter,
+    atis.arrival_letter           as atis_arrival_letter,
+    atis.departure_letter         as atis_departure_letter,
     atis.text                     as atis_text,
     atis.last_seen_at             as atis_seen_at,
     t.issued_at                   as taf_issued_at,

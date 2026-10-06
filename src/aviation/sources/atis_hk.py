@@ -2,15 +2,12 @@
 
 Page: https://atis.cad.gov.hk/ATIS/ATISweb/atis.php  (HKO and CAD's Internet ATIS for VHHH)
 
-The page's markup was not available when this was written (the host is blocked from the
-development sandbox), so nothing here depends on its structure: the page is reduced to
-text, the information letter is read from "INFORMATION <letter>" if the text has one, and
-the text is stored whole. A new row is written only when the text changes, so the table
-holds each broadcast once, with when it was first and last seen.
-
-Check the first run's `raw.ingest_log` row (`atis_hk`) and `raw.atis.text`: if the page
-is navigation and boilerplate around the broadcast, or loads the broadcast by script, the
-fetch needs to target the page's data URL instead.
+The page is server-rendered: its text holds an arrival and a departure broadcast, each
+headed "VHHH ARR ATIS I 1006Z." / "VHHH DEP ATIS T 1007Z." (information letter, then the
+issue time), followed by a "Remarks:" disclaimer. It is reduced to text up to "Remarks:",
+the two letters are read from those headings, and the text is stored whole. A new row is
+written only when the text changes, so the table holds each broadcast once, with when it
+was first and last seen. tests/fixtures/hk_atis.html is a capture of the page.
 """
 from __future__ import annotations
 
@@ -63,9 +60,12 @@ def html_to_text(html: str) -> str:
     return "\n".join(ln for ln in lines if ln)
 
 
-def info_letter(text: str) -> str | None:
-    m = re.search(r"\bINFORMATION\s+([A-Z])\b", text.upper())
-    return m.group(1) if m else None
+def letters(text: str) -> dict[str, str | None]:
+    """Information letter of the arrival and departure broadcasts, from their headings."""
+    out: dict[str, str | None] = {"ARR": None, "DEP": None}
+    for kind, letter in re.findall(r"\bVHHH\s+(ARR|DEP)\s+ATIS\s+([A-Z])\b", text.upper()):
+        out[kind] = letter
+    return out
 
 
 def fetch() -> str:
@@ -76,12 +76,13 @@ def fetch() -> str:
 
 def row(html: str) -> dict | None:
     """The ATIS row for this page, or None if it has no text."""
-    text = html_to_text(html)[:MAX_TEXT]
+    text = html_to_text(html).split("Remarks:")[0].strip()[:MAX_TEXT]
     if not text:
         return None
     now = warehouse.utcnow()
+    found = letters(text)
     return {"icao": ICAO, "text_hash": hashlib.sha1(text.encode()).hexdigest(),
-            "info_letter": info_letter(text), "text": text,
+            "arrival_letter": found["ARR"], "departure_letter": found["DEP"], "text": text,
             "first_seen_at": now, "last_seen_at": now}
 
 
@@ -91,5 +92,6 @@ def ingest(con: duckdb.DuckDBPyConnection) -> int | str:
         return "page had no text"
     n = warehouse.upsert(con, "raw.atis", [data], ["icao", "text_hash"],
                          keep_on_conflict=("first_seen_at",))
-    warehouse.log_run(con, "atis_hk", n, detail=f"information {data['info_letter']}")
-    return f"{n} (information {data['info_letter'] or 'letter not found'})"
+    detail = f"arrival {data['arrival_letter']}, departure {data['departure_letter']}"
+    warehouse.log_run(con, "atis_hk", n, detail=detail)
+    return f"{n} ({detail})"

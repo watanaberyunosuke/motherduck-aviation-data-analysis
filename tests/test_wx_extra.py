@@ -78,8 +78,16 @@ def test_met_no_uses_the_first_hour_and_drops_the_day_night_suffix():
         "instant": {"details": {"air_temperature": 9.5, "dew_point_temperature": 7.1}},
         "next_1_hours": {"summary": {"symbol_code": "lightrainshowers_day"}}}}]}}
     got = wx.parse_met_no(payload)
-    assert (got["temp_c"], got["dewpoint_c"], got["wx_text"]) == (9.5, 7.1, "Lightrainshowers")
+    assert (got["temp_c"], got["dewpoint_c"], got["wx_text"]) == (9.5, 7.1, "Light rain showers")
     assert wx.parse_met_no({"properties": {"timeseries": []}}) is None
+
+
+def test_met_no_symbol_words():
+    assert wx._symbol_text("clearsky_night") == "Clear sky"
+    assert wx._symbol_text("partlycloudy_day") == "Partly cloudy"
+    assert wx._symbol_text("heavyrainandthunder") == "Heavy rain and thunder"
+    assert wx._symbol_text("lightsnowshowersandthunder_polartwilight") == "Light snow showers and thunder"
+    assert wx._symbol_text("somethingnew_day") == "Somethingnew" and wx._symbol_text(None) is None
 
 
 def test_met_no_sun_reads_sunrise_and_sunset():

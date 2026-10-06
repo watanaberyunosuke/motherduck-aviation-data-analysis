@@ -1530,7 +1530,7 @@ export default function AirportConditions() {
             {wx.atis_text && (
               <>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
-                  {`ATIS${wx.atis_letter ? ` information ${wx.atis_letter}` : ""}, Hong Kong CAD, last seen ${wx.atis_seen_at ? String(wx.atis_seen_at).slice(0, 16).replace("T", " ") + "Z" : "recently"}`}
+                  {`ATIS${wx.atis_arrival_letter ? ` arrival ${wx.atis_arrival_letter}` : ""}${wx.atis_departure_letter ? `, departure ${wx.atis_departure_letter}` : ""}, Hong Kong CAD, last seen ${wx.atis_seen_at ? String(wx.atis_seen_at).slice(0, 16).replace("T", " ") + "Z" : "recently"}`}
                 </div>
                 <pre style={mono}>{wx.atis_text}</pre>
               </>

@@ -193,7 +193,8 @@ def built(tmp_path_factory):
                     "dewp": 9.0, "wxString": None, "rawOb": "SYNTHETIC FRESH"}}],
         ["icao", "obs_time"])
     warehouse.upsert(con, "raw.atis", [{
-        "icao": "VHHH", "text_hash": "h1", "info_letter": "B", "text": "SYNTHETIC ATIS INFORMATION B",
+        "icao": "VHHH", "text_hash": "h1", "arrival_letter": "B", "departure_letter": "C",
+        "text": "SYNTHETIC ATIS",
         "first_seen_at": now, "last_seen_at": now}], ["icao", "text_hash"])
     warehouse.upsert(con, "raw.sun_times", [{
         "icao": "YMML", "day": now.astimezone(ZoneInfo("Australia/Melbourne")).date(),
@@ -345,9 +346,9 @@ def test_conditions_fall_back_to_outside_weather_only_when_metar_is_stale(built)
 
 def test_atis_only_for_the_airport_that_has_one(built):
     con, _ = built
-    rows = dict(con.execute("""select icao, atis_letter || ': ' || atis_text
+    rows = dict(con.execute("""select icao, atis_arrival_letter || atis_departure_letter || ': ' || atis_text
                                from marts.fct_airport_conditions where atis_text is not null""").fetchall())
-    assert rows == {"VHHH": "B: SYNTHETIC ATIS INFORMATION B"}
+    assert rows == {"VHHH": "BC: SYNTHETIC ATIS"}
 
 
 def test_terminal_tracks_stay_near_the_airport(built):

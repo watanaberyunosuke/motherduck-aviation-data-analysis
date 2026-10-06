@@ -65,7 +65,8 @@ create table if not exists raw.sun_times (
 create table if not exists raw.atis (
     icao          varchar not null,
     text_hash     varchar not null,
-    info_letter   varchar,
+    arrival_letter   varchar,
+    departure_letter varchar,
     text          varchar not null,
     first_seen_at timestamptz not null,
     last_seen_at  timestamptz not null,
