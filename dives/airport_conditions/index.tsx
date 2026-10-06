@@ -452,6 +452,23 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
   );
 }
 
+// Where a temperature, dew point or weather text came from when it was not the METAR.
+const SOURCE_LABEL: Record<string, string> = { gov: "national service", "open-meteo": "Open-Meteo", "met.no": "MET Norway" };
+function fromNote(source: unknown): string {
+  return typeof source === "string" && source !== "metar" && SOURCE_LABEL[source] ? ` (${SOURCE_LABEL[source]})` : "";
+}
+// Temperature and dew point, with the source named when either is not from the METAR.
+function tempDewText(wx: Record<string, any>): string {
+  if (wx.temp_c == null) return "–";
+  const dew = wx.dewpoint_c == null ? "–" : N(wx.dewpoint_c);
+  const notes = Array.from(new Set([fromNote(wx.temp_source), fromNote(wx.dewpoint_source)].filter(Boolean)));
+  return `${N(wx.temp_c)}° / ${dew}°C${notes.join("")}`;
+}
+// "Nil" only while a METAR with no weather group is the latest word on it.
+function weatherText(wx: Record<string, any>): string {
+  return wx.wx_string ?? (wx.wx_text ? `${wx.wx_text}${fromNote(wx.wx_text_source)}` : "Nil");
+}
+
 // The selected airport's latest METAR, laid over the map.
 function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () => void }) {
   const cat = wx.flight_category as string | null;
@@ -489,9 +506,10 @@ function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () =>
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
         {row("Visibility", visText(wx))}
         {row("Ceiling", wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`)}
-        {row("Temp / dew", wx.temp_c == null ? "–" : `${N(wx.temp_c)}° / ${wx.dewpoint_c == null ? "–" : N(wx.dewpoint_c)}°C`)}
+        {row("Temp / dew", tempDewText(wx))}
         {row("QNH", wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`)}
-        {row("Weather", wx.wx_string ?? "Nil")}
+        {row("Weather", weatherText(wx))}
+        {wx.sunrise_local && wx.sunset_local && row("Sun", `↑ ${wx.sunrise_local}  ↓ ${wx.sunset_local}`)}
       </div>
       {wx.metar_at && (
         <div style={{ color: MUTED, fontSize: 11, marginTop: 6 }}>METAR {wx.metar_at}, {N(wx.metar_age_min)} min ago</div>
@@ -1485,9 +1503,10 @@ export default function AirportConditions() {
               <Tile label="Wind" value={windText(wx)} />
               <Tile label="Visibility" value={visText(wx)} />
               <Tile label="Ceiling" value={wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`} />
-              <Tile label="Temp / dew point" value={wx.temp_c == null ? "–" : `${N(wx.temp_c)}° / ${wx.dewpoint_c == null ? "–" : N(wx.dewpoint_c)}°C`} />
+              <Tile label="Temp / dew point" value={tempDewText(wx)} />
               <Tile label="QNH" value={wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`} />
-              <Tile label="Weather" value={wx.wx_string ?? "Nil"} />
+              <Tile label="Weather" value={weatherText(wx)} />
+              {wx.sunrise_local && wx.sunset_local && <Tile label="Sunrise / sunset" value={`${wx.sunrise_local} / ${wx.sunset_local}`} />}
               <Tile label="NOTAMs in force" value={wx.notams_in_force == null ? "No feed" : String(N(wx.notams_in_force))} />
             </div>
             <div style={{ fontSize: 12, color: MUTED, marginTop: 14 }}>METAR</div>

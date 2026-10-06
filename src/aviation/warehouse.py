@@ -35,6 +35,31 @@ create table if not exists raw.taf (
 -- One row per NOTAM per source. first_seen_at / last_seen_at record when the NOTAM
 -- appeared in and was last present in the feed, which is how cancellations and
 -- replacements become visible even when the source only publishes the active list.
+-- Temperature, dew point and weather text from outside the METAR (sources/wx_extra.py):
+-- one row per source (gov | open-meteo | met.no) per observation time.
+create table if not exists raw.wx_extra (
+    icao        varchar not null,
+    source      varchar not null,
+    observed_at timestamptz not null,
+    fetched_at  timestamptz not null,
+    temp_c      double,
+    dewpoint_c  double,
+    wx_text     varchar,
+    payload     json not null,
+    primary key (icao, source, observed_at)
+);
+
+-- Sunrise and sunset for the airport's local day; source is met.no or computed.
+create table if not exists raw.sun_times (
+    icao       varchar not null,
+    day        date not null,
+    source     varchar not null,
+    sunrise    timestamptz,
+    sunset     timestamptz,
+    fetched_at timestamptz not null,
+    primary key (icao, day)
+);
+
 create table if not exists raw.notam (
     source         varchar not null,  -- hk_cad | rapidapi
     notam_key      varchar not null,  -- source-stable id, e.g. VHHK:A2255/26

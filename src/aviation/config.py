@@ -33,6 +33,7 @@ class Airport:
     icao: str
     name: str
     notam_source: str | None = None  # None: no NOTAM feed
+    weather_gov: str | None = None  # hko | nea | nws; None: no national-service feed
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,10 @@ class Settings:
         with AIRPORTS_SEED.open() as f:
             zones = {row["icao"]: row["timezone"] for row in csv.DictReader(f)}
         return {icao: zones[icao] for icao in self.icao_codes}
+
+    @property
+    def weather_gov(self) -> dict[str, str | None]:
+        return {a.icao: a.weather_gov for a in self.airports}
 
     def airports_for_notam_source(self, source: str) -> list[str]:
         return [a.icao for a in self.airports if a.notam_source == source]

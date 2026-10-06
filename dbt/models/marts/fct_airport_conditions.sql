@@ -13,6 +13,31 @@ latest_taf as (
     qualify row_number() over (partition by icao order by issued_at desc, period_from) = 1
 ),
 
+-- Newest reading per airport and source from outside the METAR (raw.wx_extra), no older
+-- than three hours. A field comes from the best source that has it: the national weather
+-- service, then Open-Meteo, then MET Norway.
+extra_ranked as (
+    select
+        icao, source, temp_c, dewpoint_c, wx_text,
+        case source when 'gov' then 1 when 'open-meteo' then 2 else 3 end as priority
+    from {{ source('raw', 'wx_extra') }}
+    where observed_at >= now() - interval 3 hour
+    qualify row_number() over (partition by icao, source order by observed_at desc) = 1
+),
+
+extra as (
+    select
+        icao,
+        arg_min(temp_c, priority) filter (where temp_c is not null)       as temp_c,
+        arg_min(source, priority) filter (where temp_c is not null)       as temp_source,
+        arg_min(dewpoint_c, priority) filter (where dewpoint_c is not null) as dewpoint_c,
+        arg_min(source, priority) filter (where dewpoint_c is not null)   as dewpoint_source,
+        arg_min(wx_text, priority) filter (where wx_text is not null)     as wx_text,
+        arg_min(source, priority) filter (where wx_text is not null)      as wx_text_source
+    from extra_ranked
+    group by icao
+),
+
 notams as (
     select location, count(*) as n
     from {{ ref('fct_notams') }}
@@ -44,8 +69,26 @@ select
     m.visibility_is_lower_bound,
     m.ceiling_ft,
     m.wx_string,
-    m.temp_c,
-    m.dewpoint_c,
+    -- Weather text from outside the METAR only while the METAR is missing or stale. A fresh
+    -- METAR with no present-weather group means nothing is happening ("Nil"), and a model
+    -- value must not contradict it.
+    case when not coalesce(mf.is_fresh, false) then e.wx_text end        as wx_text,
+    case when not coalesce(mf.is_fresh, false) then e.wx_text_source end as wx_text_source,
+    -- A fresh METAR's own value wins; otherwise the best outside source, then the stale METAR.
+    case when coalesce(mf.is_fresh, false) and m.temp_c is not null then m.temp_c
+         else coalesce(e.temp_c, m.temp_c) end                             as temp_c,
+    case when coalesce(mf.is_fresh, false) and m.temp_c is not null then 'metar'
+         else coalesce(e.temp_source, case when m.temp_c is not null then 'metar' end)
+    end                                                                    as temp_source,
+    case when coalesce(mf.is_fresh, false) and m.dewpoint_c is not null then m.dewpoint_c
+         else coalesce(e.dewpoint_c, m.dewpoint_c) end                     as dewpoint_c,
+    case when coalesce(mf.is_fresh, false) and m.dewpoint_c is not null then 'metar'
+         else coalesce(e.dewpoint_source, case when m.dewpoint_c is not null then 'metar' end)
+    end                                                                    as dewpoint_source,
+    -- Today's sunrise and sunset, local time at the airport (HH:MM).
+    strftime(sun.sunrise at time zone a.timezone, '%H:%M')                 as sunrise_local,
+    strftime(sun.sunset at time zone a.timezone, '%H:%M')                  as sunset_local,
+    sun.source                                                             as sun_source,
     m.altimeter_hpa,
     t.issued_at                   as taf_issued_at,
     t.valid_from                  as taf_valid_from,
@@ -55,6 +98,11 @@ select
     case when f.source is not null then coalesce(n.n, 0) end as notams_in_force
 from {{ ref('airports') }} a
 left join latest_metar m on m.icao = a.icao
+left join (select icao, observed_at >= now() - interval 2 hour as is_fresh from latest_metar) mf
+    on mf.icao = a.icao
+left join extra e on e.icao = a.icao
+left join {{ source('raw', 'sun_times') }} sun
+    on sun.icao = a.icao and sun.day = cast(now() at time zone a.timezone as date)
 left join latest_taf t on t.icao = a.icao
 left join notams n on n.location = a.icao
 left join notam_feeds f on f.source = a.notam_source

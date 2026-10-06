@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -170,6 +171,32 @@ def built(tmp_path_factory):
     warehouse.mark_slot(con, "opensky", "YBBN", "arrival", datetime(2026, 9, 21).date(), 1)
     warehouse.mark_slot(con, "opensky", "YBBN", "arrival", datetime(2026, 9, 22).date(), 0)
     warehouse.upsert(con, "raw.opensky_flights", flights, ["icao24", "first_seen"])
+
+    # Outside-METAR weather. YMML's METARs are old, so the best source per field wins: the
+    # national service for temperature, Open-Meteo for dew point and text. YSSY gets a
+    # fresh METAR with no weather group: it stays "Nil" and keeps its own temperature.
+    now = warehouse.utcnow()
+
+    def extra(icao, source, temp, dew, text):
+        return {"icao": icao, "source": source, "observed_at": now, "fetched_at": now,
+                "temp_c": temp, "dewpoint_c": dew, "wx_text": text, "payload": {"synthetic": True}}
+
+    warehouse.upsert(con, "raw.wx_extra", [
+        extra("YMML", "gov", 20.0, None, None),
+        extra("YMML", "open-meteo", 21.0, 12.0, "Light rain"),
+        extra("YMML", "met.no", 22.0, 13.0, "Rain"),
+        extra("YSSY", "open-meteo", 30.0, 20.0, "Light rain"),
+    ], ["icao", "source", "observed_at"])
+    warehouse.upsert(con, "raw.metar", [{
+        "icao": "YSSY", "obs_time": int(now.timestamp()) - 600, "fetched_at": now,
+        "payload": {"icaoId": "YSSY", "obsTime": int(now.timestamp()) - 600, "temp": 15.0,
+                    "dewp": 9.0, "wxString": None, "rawOb": "SYNTHETIC FRESH"}}],
+        ["icao", "obs_time"])
+    warehouse.upsert(con, "raw.sun_times", [{
+        "icao": "YMML", "day": now.astimezone(ZoneInfo("Australia/Melbourne")).date(),
+        "source": "computed", "sunrise": now.replace(hour=20, minute=5, second=0, microsecond=0),
+        "sunset": now.replace(hour=8, minute=30, second=0, microsecond=0), "fetched_at": now}],
+        ["icao", "day"])
     con.close()
 
     env = {**os.environ, "WAREHOUSE": str(db)}
@@ -296,6 +323,21 @@ def test_airport_conditions_one_row_per_airport(built):
     assert by_icao["VHHH"][4] is not None
     # EHAM has a NOTAM source (faa), but it never loaded here, so still unknown.
     assert by_icao["EHAM"][1:3] == ("AMS", "Europe/Amsterdam") and by_icao["EHAM"][4] is None
+
+
+def test_conditions_fall_back_to_outside_weather_only_when_metar_is_stale(built):
+    con, _ = built
+    rows = {r[0]: r for r in con.execute("""
+        select icao, temp_c, temp_source, dewpoint_c, dewpoint_source, wx_text, wx_text_source,
+               sunrise_local, sun_source
+        from marts.fct_airport_conditions where icao in ('YMML', 'YSSY', 'EHAM')""").fetchall()}
+    # Stale METAR: gov for temperature, Open-Meteo for the fields gov lacks.
+    assert rows["YMML"][1:7] == (20.0, "gov", 12.0, "open-meteo", "Light rain", "open-meteo")
+    assert rows["YMML"][8] == "computed" and rows["YMML"][7] is not None
+    # Fresh METAR: its own values, and no model text over "Nil".
+    assert rows["YSSY"][1:7] == (15.0, "metar", 9.0, "metar", None, None)
+    # Nothing outside for EHAM: no source is claimed unless the METAR really had a value.
+    assert rows["EHAM"][2] in (None, "metar") and rows["EHAM"][5] is None
 
 
 def test_terminal_tracks_stay_near_the_airport(built):

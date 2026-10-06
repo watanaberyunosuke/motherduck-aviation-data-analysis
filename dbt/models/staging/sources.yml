@@ -9,6 +9,12 @@ sources:
           METAR/SPECI, one row per (icao, obs_time). From the Aviation Weather Center; older
           than its 30 days, from the IEM archive reshaped to the same JSON
           (payload.source = 'iem'). AWC rows win where both exist.
+      - name: wx_extra
+        description: >
+          Temperature, dew point and weather text from outside the METAR, one row per
+          (icao, source, observed_at); source is gov, open-meteo or met.no.
+      - name: sun_times
+        description: Sunrise and sunset per airport and local day, from MET Norway or computed.
       - name: taf
         description: Aviation Weather Center TAFs, one row per (icao, issue_time).
       - name: notam
