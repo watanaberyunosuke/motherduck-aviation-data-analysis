@@ -98,6 +98,9 @@ select
     strftime(sun.sunset at time zone a.timezone, '%H:%M')                  as sunset_local,
     sun.source                                                             as sun_source,
     m.altimeter_hpa,
+    pl.name                       as procedures_name,
+    pl.url                        as procedures_url,
+    pl.kind                       as procedures_kind,
     atis.arrival_letter           as atis_arrival_letter,
     atis.departure_letter         as atis_departure_letter,
     atis.text                     as atis_text,
@@ -115,6 +118,7 @@ left join (select icao, observed_at >= now() - interval 2 hour as is_fresh from 
 left join extra e on e.icao = a.icao
 left join {{ source('raw', 'sun_times') }} sun
     on sun.icao = a.icao and sun.day = cast(now() at time zone a.timezone as date)
+left join {{ source('raw', 'procedure_links') }} pl on pl.icao = a.icao
 left join latest_atis atis on atis.icao = a.icao
 left join latest_taf t on t.icao = a.icao
 left join notams n on n.location = a.icao

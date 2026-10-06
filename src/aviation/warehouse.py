@@ -60,6 +60,15 @@ create table if not exists raw.sun_times (
     primary key (icao, day)
 );
 
+-- Where each airport's official procedure charts are published (sources/procedures.py).
+create table if not exists raw.procedure_links (
+    icao       varchar primary key,
+    name       varchar not null,
+    url        varchar not null,
+    kind       varchar not null,   -- cycle | front page
+    checked_at timestamptz not null
+);
+
 -- Each distinct ATIS broadcast text once (sources/atis_hk.py), with when it was first and
 -- last seen on the page.
 create table if not exists raw.atis (

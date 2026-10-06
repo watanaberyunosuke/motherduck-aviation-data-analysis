@@ -13,6 +13,10 @@ sources:
         description: >
           Temperature, dew point and weather text from outside the METAR, one row per
           (icao, source, observed_at); source is gov, open-meteo or met.no.
+      - name: procedure_links
+        description: >
+          Link per airport to its official procedure charts (kind cycle: into the current
+          AIRAC cycle; front page: the AIP's front page). Links only, no chart data.
       - name: atis
         description: >
           Hong Kong ATIS page text from the CAD's Internet ATIS, one row per distinct text

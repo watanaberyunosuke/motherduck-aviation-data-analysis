@@ -192,6 +192,9 @@ def built(tmp_path_factory):
         "payload": {"icaoId": "YSSY", "obsTime": int(now.timestamp()) - 600, "temp": 15.0,
                     "dewp": 9.0, "wxString": None, "rawOb": "SYNTHETIC FRESH"}}],
         ["icao", "obs_time"])
+    warehouse.upsert(con, "raw.procedure_links", [{
+        "icao": "PANC", "name": "FAA d-TPP", "url": "https://example.test/panc", "kind": "cycle",
+        "checked_at": now}], ["icao"])
     warehouse.upsert(con, "raw.atis", [{
         "icao": "VHHH", "text_hash": "h1", "arrival_letter": "B", "departure_letter": "C",
         "text": "SYNTHETIC ATIS",
@@ -342,6 +345,13 @@ def test_conditions_fall_back_to_outside_weather_only_when_metar_is_stale(built)
     assert rows["YSSY"][1:7] == (15.0, "metar", 9.0, "metar", None, None)
     # Nothing outside for EHAM: no source is claimed unless the METAR really had a value.
     assert rows["EHAM"][2] in (None, "metar") and rows["EHAM"][5] is None
+
+
+def test_procedure_link_reaches_the_conditions_mart(built):
+    con, _ = built
+    rows = dict(con.execute("""select icao, procedures_url from marts.fct_airport_conditions
+                               where procedures_url is not null""").fetchall())
+    assert rows == {"PANC": "https://example.test/panc"}
 
 
 def test_atis_only_for_the_airport_that_has_one(built):
