@@ -1,3 +1,5 @@
 # Dependencies of the Vercel function only (api/index.py); the pipeline uses pyproject.toml.
 duckdb>=1.5
 fastapi>=0.115
+# duckdb needs pytz to return TIMESTAMPTZ values to Python (/api/snapshot).
+pytz
