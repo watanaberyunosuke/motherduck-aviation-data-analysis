@@ -13,6 +13,10 @@ sources:
         description: >
           Temperature, dew point and weather text from outside the METAR, one row per
           (icao, source, observed_at); source is gov, open-meteo or met.no.
+      - name: atis
+        description: >
+          Hong Kong ATIS page text from the CAD's Internet ATIS, one row per distinct text
+          (icao, text_hash) with first_seen_at / last_seen_at.
       - name: sun_times
         description: Sunrise and sunset per airport and local day, from MET Norway or computed.
       - name: taf

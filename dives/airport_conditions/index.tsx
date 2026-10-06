@@ -452,6 +452,18 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
   );
 }
 
+// Official procedure charts (SID/STAR) are published as PDFs in each state's AIP; they are
+// linked here, not drawn or copied.
+const PROCEDURES: Record<string, { name: string; url: string }> = {
+  YSSY: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
+  YMML: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
+  YBBN: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
+  WSSS: { name: "CAAS AIP Singapore", url: "https://aim-sg.caas.gov.sg" },
+  VHHH: { name: "Hong Kong AIP", url: "https://www.ais.gov.hk/" },
+  EHAM: { name: "LVNL eAIP", url: "https://eaip.lvnl.nl" },
+  PANC: { name: "FAA d-TPP", url: "https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/dtpp/" },
+};
+
 // Where a temperature, dew point or weather text came from when it was not the METAR.
 const SOURCE_LABEL: Record<string, string> = { gov: "national service", "open-meteo": "Open-Meteo", "met.no": "MET Norway" };
 function fromNote(source: unknown): string {
@@ -1515,6 +1527,14 @@ export default function AirportConditions() {
               {wx.taf_raw ? `TAF issued ${wx.taf_at}, valid ${wx.taf_from} to ${wx.taf_to}` : "TAF"}
             </div>
             <pre style={mono}>{wx.taf_raw ?? "No TAF for this airport yet."}</pre>
+            {wx.atis_text && (
+              <>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
+                  {`ATIS${wx.atis_arrival_letter ? ` arrival ${wx.atis_arrival_letter}` : ""}${wx.atis_departure_letter ? `, departure ${wx.atis_departure_letter}` : ""}, Hong Kong CAD, last seen ${wx.atis_seen_at ? String(wx.atis_seen_at).slice(0, 16).replace("T", " ") + "Z" : "recently"}`}
+                </div>
+                <pre style={mono}>{wx.atis_text}</pre>
+              </>
+            )}
           </>
         )}
       </Section>
@@ -1560,7 +1580,10 @@ export default function AirportConditions() {
             : live.at
               ? `${placed.length} live aircraft from ${live.source || "ADS-B"} (${count("inbound")} inbound, ${count("outbound")} outbound, ${count("ground")} on the ground here), updated ${clockParts(live.at, tz).time} ${iata} time. Hover an aircraft for its flight, route, altitude and speed.`
               : "Loading live positions…"}
-          {" "}{tracks.length} tracked paths. Official SID/STAR charts are not shown; no free procedure data covers these airports.
+          {" "}{tracks.length} tracked paths. Official SID/STAR charts are not drawn here.
+          {PROCEDURES[icao] && (
+            <> They are published in the <a href={PROCEDURES[icao].url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{PROCEDURES[icao].name}</a>.</>
+          )}
         </p>
       </Section>
 

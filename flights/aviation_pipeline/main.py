@@ -42,7 +42,7 @@ GIT_SHA = "__GIT_SHA__"  # commit to run, substituted at deploy
 # Every run without SOURCES, and the weather and NOTAM part of the hourly GitHub run
 # (ingest.yml). METAR and TAF fetches cover weather.lookback_hours, so a missed run
 # leaves no gap.
-PLAN = ["metar", "taf", "wx-extra", "notam-hk", "notam-faa-search"]
+PLAN = ["metar", "taf", "wx-extra", "atis-hk", "notam-hk", "notam-faa-search"]
 
 
 def pick_sources(override: str) -> list[str]:

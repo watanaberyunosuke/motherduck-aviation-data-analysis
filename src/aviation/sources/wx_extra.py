@@ -152,13 +152,32 @@ def parse_open_meteo(payload: dict) -> dict | None:
             "wx_text": WMO_TEXT.get(int(code)) if code is not None else None}
 
 
+_SYMBOL_WORDS = {
+    "clearsky": "clear sky", "fair": "fair", "partlycloudy": "partly cloudy", "cloudy": "cloudy",
+    "fog": "fog", "rain": "rain", "rainshowers": "rain showers", "sleet": "sleet",
+    "sleetshowers": "sleet showers", "snow": "snow", "snowshowers": "snow showers",
+    "thunder": "thunder",
+}
+
+
 def _symbol_text(symbol: str | None) -> str | None:
-    """'lightrainshowers_day' -> 'Lightrainshowers'; the day/night suffix is dropped."""
+    """MET Norway symbol code to words: 'lightrainshowersandthunder_day' -> 'Light rain
+    showers and thunder'. The day/night suffix is dropped; a code outside the known
+    words is returned as it came, so nothing is lost."""
     if not symbol:
         return None
     base = symbol.rsplit("_", 1)[0] if symbol.rsplit("_", 1)[-1] in (
         "day", "night", "polartwilight") else symbol
-    return base.replace("_", " ").capitalize()
+    parts = []
+    for part in base.split("and"):
+        strength = ""
+        for prefix in ("light", "heavy"):
+            if part.startswith(prefix) and part[len(prefix):] in _SYMBOL_WORDS:
+                strength, part = prefix + " ", part[len(prefix):]
+        if part not in _SYMBOL_WORDS:
+            return base.capitalize()
+        parts.append(strength + _SYMBOL_WORDS[part])
+    return " and ".join(parts).capitalize()
 
 
 def parse_met_no(payload: dict) -> dict | None:

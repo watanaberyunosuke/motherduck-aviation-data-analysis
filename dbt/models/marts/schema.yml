@@ -164,6 +164,10 @@ models:
         description: >
           Weather text from outside the METAR, only while the METAR is missing or over 2 h
           old. Null while a fresh METAR has no present-weather group (wx_string null: "Nil").
+      - name: atis_text
+        description: >
+          ATIS page text last seen within 3 h (Hong Kong only, from the CAD's Internet ATIS);
+          null elsewhere and when the page has not loaded.
       - name: sunrise_local
         description: Today's sunrise, HH:MM local time at the airport (MET Norway or computed).
 
