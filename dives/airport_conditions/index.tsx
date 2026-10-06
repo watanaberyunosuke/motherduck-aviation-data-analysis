@@ -715,10 +715,24 @@ function useFeedMemory(icao: string, rows: BoardLive[], at: Date | null) {
   return memory;
 }
 
+// A board row, laid out like En route: status coloured by lateness where it is known,
+// flight, route, stand or gate, planned time (scheduled, else usual) and the latest local
+// time (estimated or actual).
 type BoardRow = {
-  key: string; phase: "past" | "next"; sort: number; time: string; flight_iata: string | null; callsign: string;
-  other: string | null; status: string; usual: string | null;
+  key: string; phase: "past" | "next"; sort: number; flight_iata: string | null; callsign: string;
+  other: string | null;
+  status: string;          // "Late 22 min", "Boarding", "Expected, not yet within 500 NM"
+  rag: Rag;                // unknown (grey) where there is no lateness
+  where: string | null;    // stand (arrivals) or gate (departures); "Cargo" for freighters
+  planned: string | null;  // scheduled time, or the usual time where there is no schedule
+  local: string;           // "Est 15:09", "At gate 14:59", "Landed ~15:04", "–"
 };
+
+// Lateness of `t` against `planned`, in En route's words and colours.
+function lateness(t: Date, planned: Date): { status: string; rag: Rag } {
+  const m = (t.getTime() - planned.getTime()) / 60_000;
+  return { rag: ragOf(m), status: m < -15 ? `Early ${Math.round(-m)} min` : m < 15 ? "On time" : `Late ${Math.round(m)} min` };
+}
 
 function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>, history: History,
   now: Date, tz: string, flightIata: (c: string) => string | null): BoardRow[] {
@@ -734,8 +748,8 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     if (isEnRoute(r)) continue;
     const landed = memory.get(r.callsign)?.landed_at ?? null;
     add({
-      phase: "past", flight_iata: r.flight_iata, callsign: r.callsign, other: r.other, usual: r.usual,
-      sort: (landed ?? now).getTime(), time: landed ? `~${at(landed)}` : "–", status: "Landed, on the ground",
+      phase: "past", flight_iata: r.flight_iata, callsign: r.callsign, other: r.other, sort: (landed ?? now).getTime(),
+      status: "Landed, on the ground", rag: "unknown", where: null, planned: r.usual, local: landed ? `Landed ~${at(landed)}` : "–",
     });
   }
 
@@ -749,9 +763,9 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     const when = arriving ? (m.landed_at ?? m.event_at ?? m.gone_at) : (m.event_at ?? m.gone_at);
     if (when.getTime() < cutoff) continue;
     add({
-      phase: "past", flight_iata: m.flight_iata, callsign: m.callsign, other: m.other, usual: m.usual,
-      sort: when.getTime(), time: `~${at(when)}`,
+      phase: "past", flight_iata: m.flight_iata, callsign: m.callsign, other: m.other, sort: when.getTime(),
       status: arriving ? "Landed" : `Departed, ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
+      rag: m.rag, where: null, planned: m.usual, local: `${arriving ? "Landed" : "Took off"} ~${at(when)}`,
     });
   }
 
@@ -764,10 +778,10 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     if (delta < -PAST_HOURS * 60 || delta > NEXT_HOURS * 60) continue;
     const when = new Date(now.getTime() + delta * 60_000);
     add({
-      phase: delta < 0 ? "past" : "next", flight_iata: flightIata(callsign), callsign,
-      other: seen.other, usual: hhmm(seen.usual), sort: when.getTime(), time: at(when),
+      phase: delta < 0 ? "past" : "next", flight_iata: flightIata(callsign), callsign, other: seen.other, sort: when.getTime(),
       status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}, not seen live`
         : arriving ? "Expected, not yet within 500 NM" : "Expected",
+      rag: "unknown", where: null, planned: hhmm(seen.usual), local: "–",
     });
   }
   return out.sort((a, b) => a.sort - b.sort);
@@ -794,63 +808,79 @@ function scheduleBoard(dir: Dir, flights: Sched[], rows: BoardLive[], memory: Ma
     if (s.dir !== dir || when.getTime() < from || when.getTime() > to) continue;
     if (s.callsign && enRoute.has(s.callsign)) continue;
     const onGround = dir === "inbound" && s.callsign ? landed.get(s.callsign) : undefined;
-    const late = (t: Date) => {
-      const m = Math.round((t.getTime() - s.scheduled_at.getTime()) / 60_000);
-      return m >= 15 ? `, ${m} min late` : m <= -15 ? `, ${-m} min early` : "";
-    };
-    const landedAt = onGround ? memory.get(onGround.callsign)?.landed_at : null;
-    const status = onGround && !s.actual_at ? `Landed${landedAt ? ` ~${at(landedAt)}` : ""}, on the ground`
-      : s.actual_at ? `${{ at_gate: "At gate", landed: "Landed", departed: "Departed" }[s.state] ?? "Actual"} ${at(s.actual_at)}${late(s.actual_at)}`
-      : s.estimated_at ? `Estimated ${at(s.estimated_at)}${late(s.estimated_at)}`
+    const landedAt = onGround && !s.actual_at ? memory.get(onGround.callsign)?.landed_at ?? null : null;
+    // Lateness where there is a time to measure (actual, the feed's landing, the airport's
+    // estimate); otherwise the airport's state.
+    const t = s.actual_at ?? landedAt ?? s.estimated_at;
+    const state = onGround && !s.actual_at ? "Landed, on the ground"
       : ({ scheduled: "Scheduled", cancelled: "Cancelled", delayed: "Delayed", boarding_soon: "Boarding soon",
           boarding: "Boarding", final_call: "Final call", gate_closed: "Gate closed" } as Record<string, string>)[s.state]
         ?? s.status ?? "–";
-    const where = [s.stand && `Stand ${s.stand}`, s.gate && `Gate ${s.gate}`, s.cargo && "Cargo"].filter(Boolean).join(" · ");
+    const { status, rag } = t ? lateness(t, s.scheduled_at)
+      : { status: state, rag: (s.state === "cancelled" ? "red" : s.state === "delayed" ? "amber" : "unknown") as Rag };
+    const local = s.actual_at ? `${({ at_gate: "At gate", landed: "Landed", departed: "Departed" } as Record<string, string>)[s.state] ?? "Actual"} ${at(s.actual_at)}`
+      : landedAt ? `Landed ~${at(landedAt)}`
+      : onGround ? "Landed"
+      : s.estimated_at ? `Est ${at(s.estimated_at)}` : "–";
     out.push({
       key: `${s.flight}|${s.scheduled_at.getTime()}`,
       phase: s.actual_at || onGround || (s.state === "cancelled" && s.scheduled_at <= now) ? "past" : "next",
-      sort: when.getTime(), time: scheduled(s.scheduled_at), flight_iata: s.flight, callsign: s.callsign ?? s.flight,
-      other: s.other, usual: null, status: where ? `${status} · ${where}` : status,
+      sort: when.getTime(), flight_iata: s.flight, callsign: s.callsign ?? s.flight, other: s.other,
+      // Boarding, final call and so on still matter once there is an estimate.
+      status: t && !["scheduled", "estimated", "at_gate", "landed", "departed", "other"].includes(s.state) ? `${state} · ${status}` : status,
+      rag, where: (dir === "inbound" ? s.stand : s.gate) ?? (s.cargo ? "Cargo" : null),
+      planned: scheduled(s.scheduled_at), local,
     });
   }
   return out.sort((a, b) => a.sort - b.sort);
 }
 
 // Past flights greyed out and trimmed to the latest few; coming up in full, since that is
-// what most readers want.
-function Board({ rows, dir, iata }: { rows: BoardRow[]; dir: Dir; iata: string }) {
+// what most readers want. The columns follow En route.
+function Board({ rows, dir, iata, planned, showWhere }: {
+  rows: BoardRow[]; dir: Dir; iata: string; planned: string; showWhere: boolean;
+}) {
   const [allPast, setAllPast] = useState(false);
   const past = rows.filter((r) => r.phase === "past");
   const next = rows.filter((r) => r.phase === "next");
   const shownPast = allPast ? past : past.slice(-PAST_SHOWN);
+  const inbound = dir === "inbound";
+  const cols = showWhere ? 6 : 5;
   const head = (title: string, extra?: ReactNode) => (
     <tr>
-      <td colSpan={4} style={{ ...td, paddingTop: 14, fontSize: 12, fontWeight: 600, color: MUTED }}>
+      <td colSpan={cols} style={{ ...td, paddingTop: 14, fontSize: 12, fontWeight: 600, color: MUTED }}>
         {title}{extra}
       </td>
     </tr>
   );
-  const row = (r: BoardRow, greyed: boolean) => {
-    const cell = (style: CSSProperties): CSSProperties => (greyed ? { ...style, color: MUTED } : style);
+  const row = (r: BoardRow) => {
+    const color = RAG_COLORS[r.rag];
     return (
       <tr key={r.key}>
-        <td style={cell({ ...num, textAlign: "left", fontWeight: 600 })}>{r.time}</td>
-        <td style={cell({ ...td, fontWeight: 600 })}><FlightCode iata={r.flight_iata} callsign={r.callsign} /></td>
-        <td style={cell(td)}>{r.other ?? "–"}</td>
-        <td style={cell(td)}>{r.status}</td>
+        <td style={td}>
+          <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: color, marginRight: 6 }} />
+          <span style={{ color, fontWeight: 600 }}>{r.status}</span>
+        </td>
+        <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} /></td>
+        <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
+        {showWhere && <td style={td}>{r.where ?? "–"}</td>}
+        <td style={{ ...num, color: showWhere ? undefined : MUTED }}>{r.planned ?? "–"}</td>
+        <td style={num}>{r.local}</td>
       </tr>
     );
   };
-  const none = <tr><td colSpan={4} style={{ ...td, color: MUTED }}>None</td></tr>;
+  const none = <tr><td colSpan={cols} style={{ ...td, color: MUTED }}>None</td></tr>;
   return (
     <div style={{ maxHeight: 640, overflowY: "auto" }}>
       <table style={{ borderCollapse: "collapse", fontSize: 13, width: "100%" }}>
         <thead style={{ position: "sticky", top: 0, background: c("bg"), zIndex: 1 }}>
           <tr>
-            <th style={th}>{iata} local</th>
-            <th style={th}>Flight</th>
-            <th style={th}>{dir === "inbound" ? "From" : "To"}</th>
             <th style={th}>Status</th>
+            <th style={th}>Flight</th>
+            <th style={th}>Route</th>
+            {showWhere && <th style={th}>{inbound ? "Stand" : "Gate"}</th>}
+            <th style={{ ...th, textAlign: "right" }}>{planned}</th>
+            <th style={{ ...th, textAlign: "right" }}>{iata} local</th>
           </tr>
         </thead>
         <tbody style={{ opacity: 0.6 }}>
@@ -863,11 +893,11 @@ function Board({ rows, dir, iata }: { rows: BoardRow[]; dir: Dir; iata: string }
               </button>
             </>
           ))}
-          {shownPast.length === 0 ? none : shownPast.map((r) => row(r, true))}
+          {shownPast.length === 0 ? none : shownPast.map(row)}
         </tbody>
         <tbody>
           {head(`Next ${NEXT_HOURS} hours (${next.length})`)}
-          {next.length === 0 ? none : next.map((r) => row(r, false))}
+          {next.length === 0 ? none : next.map(row)}
         </tbody>
       </table>
     </div>
@@ -1306,7 +1336,7 @@ export default function AirportConditions() {
   const enRoute = boardLive.filter(isEnRoute).sort((a, b) => enRouteOrder(a) - enRouteOrder(b));
   const ragCount = (rag: Rag) => enRoute.filter((r) => r.rag === rag).length;
   const scheduleNote = (what: string) =>
-    `Before and after En route: ${what} on the ${schedule.source} live board, passenger and cargo, from ${PAST_HOURS} hours ago to ${NEXT_HOURS} hours ahead, refreshed every 3 minutes. Times are scheduled, ${iata} local; status gives the airport's estimate or actual time. Flights on the live feed now are in En route.${schedule.error ? ` Last refresh failed (${schedule.error}).` : ""}`;
+    `Before and after En route: ${what} on the ${schedule.source} live board, passenger and cargo, from ${PAST_HOURS} hours ago to ${NEXT_HOURS} hours ahead, refreshed every 3 minutes. Laid out like En route: status is lateness against the scheduled time (green under 15 min late, amber 15-44, red 45 or more), or the airport's state where it gives no time; ${iata} local is the airport's estimate or actual time. Flights on the live feed now are in En route.${schedule.error ? ` Last refresh failed (${schedule.error}).` : ""}`;
   const boards = useMemo(() => {
     const now = live.at ?? new Date();
     return {
@@ -1529,6 +1559,7 @@ export default function AirportConditions() {
                   <th style={th}>Status</th>
                   <th style={th}>Flight</th>
                   <th style={th}>Route</th>
+                  {schedule.source && <th style={th}>Stand / gate</th>}
                   <th style={{ ...th, textAlign: "right" }}>Distance</th>
                   <th style={{ ...th, textAlign: "right" }}>Altitude</th>
                   <th style={{ ...th, textAlign: "right" }}>Speed</th>
@@ -1550,12 +1581,16 @@ export default function AirportConditions() {
                       <td style={td}>
                         <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: color, marginRight: 6 }} />
                         <span style={{ color, fontWeight: 600 }}>
-                          {r.on_ground ? `On the ground${r.sched?.gate ? ` · Gate ${r.sched.gate}` : ""}${r.status_note ? ` · ${r.status_note}` : ""}`
-                            : `${ragText(a)}${inbound && r.sched?.stand ? ` · Stand ${r.sched.stand}` : ""}`}
+                          {r.on_ground ? `On the ground${r.status_note ? ` · ${r.status_note}` : ""}` : ragText(a)}
                         </span>
                       </td>
                       <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} icao24={a.icao24} /></td>
                       <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
+                      {schedule.source && (
+                        <td style={td} title={inbound ? "Stand" : "Gate"}>
+                          {(inbound ? r.sched?.stand : r.sched?.gate) ?? (r.sched?.cargo ? "Cargo" : "–")}
+                        </td>
+                      )}
                       <td style={num}>{Math.round(r.dist_nm)} NM</td>
                       <td style={num}>{r.on_ground ? "Ground" : `${a.alt_ft.toLocaleString()} ft`}</td>
                       <td style={num}>{a.speed_kt == null ? "–" : `${a.speed_kt} kt`}</td>
@@ -1582,12 +1617,12 @@ export default function AirportConditions() {
         </p>
       </Section>
 
-      <Section title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Times are ${iata} local; ~ marks an estimate.`}>
-        {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.inbound} dir="inbound" iata={iata} />}
+      <Section title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Status is lateness against the usual time where the feed saw the flight; ${iata} local is when it saw it land (~ marks an estimate).`}>
+        {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.inbound} dir="inbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
-      <Section title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Times are ${iata} local; ~ marks an estimate.`}>
-        {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.outbound} dir="outbound" iata={iata} />}
+      <Section title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Status is lateness against the usual time where the feed saw the flight; ${iata} local is its estimated take-off (~).`}>
+        {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.outbound} dir="outbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
       <Section title="Arrivals, last 30 days">
