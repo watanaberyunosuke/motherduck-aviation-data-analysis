@@ -64,7 +64,7 @@ jobs:
       # deploy retries the same changes. pyproject.toml / uv.lock pin the dbt version
       # CI builds with. The Flight downloads its pinned commit and runs src/, dbt/ and
       # config/ from it, so those count as Flight changes: skipping them would leave the
-      # hourly run rebuilding the previous models. Manual runs, new branches and force
+      # Flight rebuilding the previous models. Manual runs, new branches and force
       # pushes (no usable `before`) run everything.
       - name: Detect changes
         id: changes
@@ -115,7 +115,7 @@ jobs:
         working-directory: dbt
         run: uv run dbt build --profiles-dir .
 
-      # Points the hourly Flight at this commit (and refreshes its secrets), then
+      # Points the Flight at this commit (and refreshes its secrets), then
       # publishes the Dive. Runs after dbt so the Dive never queries a mart that isn't built.
       - name: Publish MotherDuck Flight and Dive
         if: steps.changes.outputs.flight == 'true' || steps.changes.outputs.dive == 'true'
@@ -135,9 +135,9 @@ jobs:
 
       # Smoke test the published Flight: one METAR ingest then dbt build, in the Flight
       # runtime. Catches failures that only show up there (e.g. ingest and dbt sharing a
-      # process) on the push that causes them, not at the next hourly run. Skipped with a
+      # process) on the push that causes them, not at the next manual run. Skipped with a
       # warning if the plan's daily Flight minutes are spent (exit 75): the Flight is
-      # already published, and the next scheduled run tests it.
+      # already published, and the next manual Flight run tests it.
       - name: Run Flight once
         if: steps.changes.outputs.flight == 'true'
         run: |
