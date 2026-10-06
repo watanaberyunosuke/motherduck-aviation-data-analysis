@@ -3,9 +3,9 @@
     python scripts/run_flight.py [--sources "metar taf"] [--timeout-minutes 25]
     python scripts/run_flight.py --flight initial_load [--config STEPS=weather ...]
 
-The scheduled trigger for the Flight, called by .github/workflows/ingest.yml. MotherDuck only
-schedules Flights on paid plans and this account is on the free plan, so GitHub's cron
-starts each run instead. Waiting for the run (rather than fire-and-forget) means a failed
+Called by .github/workflows/ingest.yml (`runner: flight`) and the ci.yml deploy job's
+smoke test. MotherDuck only schedules Flights on paid plans and this account is on the
+free plan, so GitHub Actions starts each run instead. Waiting for the run (rather than fire-and-forget) means a failed
 Flight fails the workflow, and the warehouse-writer concurrency group covers the Flight as
 well as the deploy job.
 

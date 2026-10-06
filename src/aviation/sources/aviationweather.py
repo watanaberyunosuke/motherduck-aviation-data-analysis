@@ -3,9 +3,10 @@
 Docs: https://aviationweather.gov/data/api/  (free, no key, global ICAO coverage)
 
 Limits from the docs: at most 100 requests a minute, at most 400 results a request, and
-`date` reaches back 30 days only. The scheduled run is twice a day, so each fetch looks
-back `weather.lookback_hours` (config/airports.yml) in chunks rather than taking only the
-latest reports. Older METARs come from the IEM archive (sources/iem.py),
+`date` reaches back 30 days only. The scheduled run is hourly but can be delayed or
+dropped, so each fetch looks back `weather.lookback_hours` (config/airports.yml) in
+chunks rather than taking only the latest reports. Older METARs come from the IEM
+archive (sources/iem.py),
 which also stands in for the hourly fetch when AWC fails. There is no free archive of
 non-US TAFs, so TAFs go back 30 days at most.
 """

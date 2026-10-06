@@ -8,7 +8,7 @@ later runs update them (each update is a new version in MotherDuck).
 
 - Flight `aviation_pipeline` (flights/aviation_pipeline): ingest + dbt build, pinned to
   --sha. The commit must already be on GitHub, because the Flight downloads it. Published
-  unscheduled; scripts/run_flight.py starts it hourly from GitHub Actions.
+  unscheduled; scripts/run_flight.py starts it on demand from GitHub Actions.
 - Flight `initial_load` (flights/initial_load): the one-off history load, pinned the same
   way and only ever run on demand (scripts/run_flight.py --flight initial_load).
   --flight NAME publishes just the named Flight(s), e.g. to try initial_load from a branch

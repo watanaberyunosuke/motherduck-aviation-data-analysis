@@ -1,10 +1,11 @@
 """MotherDuck Flight: scheduled ingest and dbt build for the aviation warehouse.
 
-One Flight runs weather and NOTAM ingest and dbt twice a day (ingest.yml starts it at
-00:00 and 12:00 UTC; the free plan cannot schedule Flights). Running everything in one Flight means ingest and dbt never write
-to the warehouse at the same time; that was what the GitHub Actions concurrency group did
-before. Flights are not part of it: they load once a day on the GitHub runner (ingest.yml),
-outside the plan's Flight minutes. SOURCES='opensky aerodatabox' still runs them here.
+One Flight runs weather and NOTAM ingest and dbt, on demand: from ingest.yml with
+`runner: flight` and as the deploy's smoke test (the free plan cannot schedule Flights).
+The hourly schedule runs the same PLAN on the GitHub runner instead, with flights and one
+dbt build, because the dbt build outgrew the plan's daily Flight minutes. Running
+everything in one Flight means ingest and dbt never write to the warehouse at the same
+time. SOURCES='opensky aerodatabox' runs flights here too.
 
 Each run downloads a pinned commit of this repo from GitHub, runs PLAN, then runs
 `dbt build`. The commit is written
@@ -38,8 +39,9 @@ REPO = "__REPO__"        # owner/name, substituted at deploy
 GIT_SHA = "__GIT_SHA__"  # commit to run, substituted at deploy
 
 
-# Every scheduled run. METAR and TAF fetches cover weather.lookback_hours, so running
-# twice a day (or missing a run) leaves no gap.
+# Every run without SOURCES, and the weather and NOTAM part of the hourly GitHub run
+# (ingest.yml). METAR and TAF fetches cover weather.lookback_hours, so a missed run
+# leaves no gap.
 PLAN = ["metar", "taf", "notam-hk", "notam-faa-search"]
 
 
