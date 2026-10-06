@@ -452,6 +452,18 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
   );
 }
 
+// Official procedure charts (SID/STAR) are published as PDFs in each state's AIP; they are
+// linked here, not drawn or copied.
+const PROCEDURES: Record<string, { name: string; url: string }> = {
+  YSSY: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
+  YMML: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
+  YBBN: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
+  WSSS: { name: "CAAS AIP Singapore", url: "https://aim-sg.caas.gov.sg" },
+  VHHH: { name: "Hong Kong AIP", url: "https://www.ais.gov.hk/" },
+  EHAM: { name: "LVNL eAIP", url: "https://eaip.lvnl.nl" },
+  PANC: { name: "FAA d-TPP", url: "https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/dtpp/" },
+};
+
 // Where a temperature, dew point or weather text came from when it was not the METAR.
 const SOURCE_LABEL: Record<string, string> = { gov: "national service", "open-meteo": "Open-Meteo", "met.no": "MET Norway" };
 function fromNote(source: unknown): string {
@@ -1548,7 +1560,7 @@ export default function AirportConditions() {
 
       <Section
         title="Airspace"
-        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Click an aircraft for its details. Zoom out to see en route traffic. Official SID/STAR charts are not shown: no free procedure data covers these airports."
+        note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Click an aircraft for its details. Zoom out to see en route traffic."
       >
         {!wx ? <Skeleton h={400} /> : (
           <AirspaceMap
@@ -1568,7 +1580,10 @@ export default function AirportConditions() {
             : live.at
               ? `${placed.length} live aircraft from ${live.source || "ADS-B"} (${count("inbound")} inbound, ${count("outbound")} outbound, ${count("ground")} on the ground here), updated ${clockParts(live.at, tz).time} ${iata} time. Hover an aircraft for its flight, route, altitude and speed.`
               : "Loading live positions…"}
-          {" "}{tracks.length} tracked paths. Official SID/STAR charts are not shown; no free procedure data covers these airports.
+          {" "}{tracks.length} tracked paths. Official SID/STAR charts are not drawn here.
+          {PROCEDURES[icao] && (
+            <> They are published in the <a href={PROCEDURES[icao].url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{PROCEDURES[icao].name}</a>.</>
+          )}
         </p>
       </Section>
 
