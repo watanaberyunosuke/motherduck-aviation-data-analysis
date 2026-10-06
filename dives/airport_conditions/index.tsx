@@ -6,7 +6,7 @@
 // Published by scripts/deploy_motherduck.py; preview locally with `motherduck dive watch`.
 // The same file is the Vercel site: web/ bundles it and runs its SQL on DuckDB-WASM.
 // Live aircraft come from the Vercel API (/api/live), which proxies OpenSky.
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSQLQuery, useDiveState } from "@motherduck/react-sql-query";
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -626,6 +626,9 @@ type BoardLive = {
   on_ground: boolean; dist_nm: number; event_at: Date | null; rag: Rag; status_note: string | null;
   aircraft: Placed;
 };
+// En route is flights still to arrive or depart: an arrival already on the ground here is
+// on the Arrivals board instead, while a departure on the ground is still to leave.
+const isEnRoute = (r: BoardLive) => !(r.dir === "inbound" && r.on_ground);
 // What the feed showed of a flight this visit.
 type Remembered = BoardLive & { last_at: Date; gone_at: Date | null; landed_at: Date | null };
 
@@ -659,10 +662,20 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
   now: Date, tz: string, flightIata: (c: string) => string | null): BoardRow[] {
   const at = (d: Date) => clockParts(d, tz).time.slice(0, 5);
   const out: BoardRow[] = [];
-  // Flights on the feed now belong to En route, not the board.
-  const placed = new Set(rows.map((r) => r.callsign));
+  // Flights on the feed now belong to En route, not the board, except arrivals on the ground.
+  const placed = new Set(rows.filter(isEnRoute).map((r) => r.callsign));
   const add = (r: Omit<BoardRow, "key">) => { placed.add(r.callsign); out.push({ ...r, key: `${r.phase}|${r.callsign}` }); };
   const arriving = dir === "inbound";
+
+  // Landed and still on the feed: taxiing in, or parked with the transponder on.
+  if (arriving) for (const r of rows) {
+    if (isEnRoute(r)) continue;
+    const landed = memory.get(r.callsign)?.landed_at ?? null;
+    add({
+      phase: "past", flight_iata: r.flight_iata, callsign: r.callsign, other: r.other, usual: r.usual,
+      sort: (landed ?? now).getTime(), time: landed ? `~${at(landed)}` : "–", status: "Landed, on the ground",
+    });
+  }
 
   // Past: seen this visit, then gone. Inbound flights count as landed only if they were on
   // the ground or inside the terminal area when they went; further out it is a coverage gap.
@@ -1049,6 +1062,10 @@ export default function AirportConditions() {
     return m;
   }, [historyQ.data]);
 
+  // Direction of each airborne aircraft at the last fix, by airport and transponder address.
+  // An arrival stays inbound until it lands, though downwind legs and holds point it away
+  // from the airport, and a departure stays outbound.
+  const lastDir = useRef(new Map<string, "inbound" | "outbound">());
   const placed = useMemo((): Placed[] => {
     if (!wx) return [];
     const aLat = N(wx.lat), aLon = N(wx.lon);
@@ -1065,11 +1082,27 @@ export default function AirportConditions() {
       // Beyond 30 NM, history must agree with geometry: a reused callsign flying away is
       // not inbound. Closer in, aircraft manoeuvre on approach and departure, so trust history.
       const near = km < 30 * 1.852;
+      // Near the airport a clear descent or climb says more than the heading, which turns
+      // away from the airport on downwind and in holds.
+      const descending = near && a.vrate_fpm != null && a.vrate_fpm <= -300;
+      const climbing = near && a.vrate_fpm != null && a.vrate_fpm >= 300;
       let dir: Placed["dir"] = "other";
       if (a.on_ground) dir = km < 8 ? "ground" : "other";
-      else if (h?.inbound !== undefined && h?.outbound !== undefined) dir = off < 90 ? "inbound" : "outbound";
+      else if (h?.inbound !== undefined && h?.outbound !== undefined) {
+        dir = descending ? "inbound" : climbing ? "outbound" : off < 90 ? "inbound" : "outbound";
+      }
       else if (h?.inbound !== undefined && (near || off < 110)) dir = "inbound";
       else if (h?.outbound !== undefined && (near || off > 70)) dir = "outbound";
+      const key = `${icao}|${a.icao24}`;
+      const prev = lastDir.current.get(key);
+      // A descent near the airport overrides an earlier outbound: an arrival first seen
+      // level on downwind, or a departure coming back. A climb never overrides inbound,
+      // so a go-around stays an arrival.
+      if (!a.on_ground && prev && h?.[prev] !== undefined) {
+        dir = prev === "outbound" && descending && h?.inbound !== undefined ? "inbound" : prev;
+      }
+      if (dir === "inbound" || dir === "outbound") lastDir.current.set(key, dir);
+      else lastDir.current.delete(key);
       const speed = N(a.speed_kt);
       const seen = dir === "inbound" ? h?.inbound : dir === "outbound" ? h?.outbound : undefined;
       // Minutes between the aircraft and the runway: at current ground speed to / from the
@@ -1097,7 +1130,7 @@ export default function AirportConditions() {
         event_at: dir === "inbound" || dir === "outbound" ? at : null,
       };
     });
-  }, [live.aircraft, live.at, history, wx, airlineIata, tz, kpi, depKpi]);
+  }, [live.aircraft, live.at, history, wx, airlineIata, tz, kpi, depKpi, icao]);
   const count = (dir: Placed["dir"]) => placed.filter((a) => a.dir === dir).length;
 
   // Recognised flights on the feed, for the boards. An aircraft on the ground here is the
@@ -1132,12 +1165,12 @@ export default function AirportConditions() {
     return rows;
   }, [placed, history, live.at, tz]);
   const memory = useFeedMemory(icao, boardLive, live.at);
-  // En route: every recognised flight on the feed. Inbound first, nearest ETA first, then
-  // those landed and on the ground; outbound waiting on the ground, then airborne, nearest first.
+  // En route: recognised flights on the feed still to arrive or depart. Inbound first,
+  // nearest ETA first; then outbound waiting on the ground, then airborne, nearest first.
   const enRouteOrder = (r: BoardLive) =>
-    r.dir === "inbound" ? (r.on_ground ? 1e6 : r.aircraft.eta_min ?? r.dist_nm) : 2e6 + (r.on_ground ? 0 : 1 + r.dist_nm);
-  const enRoute = [...boardLive].sort((a, b) => enRouteOrder(a) - enRouteOrder(b));
-  const ragCount = (rag: Rag) => enRoute.filter((r) => !(r.dir === "inbound" && r.on_ground) && r.rag === rag).length;
+    r.dir === "inbound" ? r.aircraft.eta_min ?? r.dist_nm : 2e6 + (r.on_ground ? 0 : 1 + r.dist_nm);
+  const enRoute = boardLive.filter(isEnRoute).sort((a, b) => enRouteOrder(a) - enRouteOrder(b));
+  const ragCount = (rag: Rag) => enRoute.filter((r) => r.rag === rag).length;
   const boards = useMemo(() => {
     const now = live.at ?? new Date();
     return {
@@ -1346,7 +1379,7 @@ export default function AirportConditions() {
 
       <Section
         title="En route"
-        note="Flights within 500 NM that use this airport, in the air or on the ground here: what is happening now, between the past and coming-up flights on the boards below. OpenSky has no schedules, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
+        note="Flights within 500 NM that use this airport, in the air or on the ground here waiting to depart (arrivals on the ground are on the Arrivals board): what is happening now, between the past and coming-up flights on the boards below. OpenSky has no schedules, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
       >
         {!live.at ? <Skeleton h={160} /> : enRoute.length === 0 ? (
           <Empty>{live.error ? "No live positions." : `No inbound or outbound flights for ${iata} recognised right now.`}</Empty>
@@ -1369,17 +1402,14 @@ export default function AirportConditions() {
                 {enRoute.map((r) => {
                   const a = r.aircraft;
                   const inbound = r.dir === "inbound";
-                  const landed = inbound && r.on_ground;
-                  const color = landed ? INK : RAG_COLORS[r.rag];
-                  const landedAt = memory.get(r.callsign)?.landed_at;
+                  const color = RAG_COLORS[r.rag];
                   const hm = (d: Date) => clockParts(d, tz).time.slice(0, 5);
                   return (
                     <tr key={a.icao24}>
                       <td style={td}>
-                        <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: landed ? MUTED : color, marginRight: 6 }} />
+                        <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: color, marginRight: 6 }} />
                         <span style={{ color, fontWeight: 600 }}>
-                          {landed ? "Landed, on the ground"
-                            : r.on_ground ? `On the ground${r.status_note ? ` · ${r.status_note}` : ""}`
+                          {r.on_ground ? `On the ground${r.status_note ? ` · ${r.status_note}` : ""}`
                             : ragText(a)}
                         </span>
                       </td>
@@ -1390,8 +1420,7 @@ export default function AirportConditions() {
                       <td style={num}>{a.speed_kt == null ? "–" : `${a.speed_kt} kt`}</td>
                       <td style={{ ...num, color: MUTED }} title={inbound ? "Usual arrival" : "Usual departure"}>{r.usual ?? "–"}</td>
                       <td style={num}>
-                        {landed ? (landedAt ? `Landed ~${hm(landedAt)}` : "–")
-                          : r.on_ground || !r.event_at ? "–"
+                        {r.on_ground || !r.event_at ? "–"
                           : inbound ? `ETA ${hm(r.event_at)} (${Math.round(a.eta_min ?? 0)} min)`
                           : `Took off ~${hm(r.event_at)}`}
                       </td>
@@ -1404,11 +1433,11 @@ export default function AirportConditions() {
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
           {enRoute.filter((r) => r.dir === "inbound" && !r.on_ground).length} inbound, {enRoute.filter((r) => r.dir === "outbound" && !r.on_ground).length} outbound,{" "}
-          {enRoute.filter((r) => r.on_ground).length} on the ground here: {ragCount("green")} on time, {ragCount("amber")} amber, {ragCount("red")} red, {ragCount("unknown")} unknown. Flights that have not used {iata} in the last 30 days show as other traffic.
+          {enRoute.filter((r) => r.on_ground).length} on the ground here waiting to depart: {ragCount("green")} on time, {ragCount("amber")} amber, {ragCount("red")} red, {ragCount("unknown")} unknown. Flights that have not used {iata} in the last 30 days show as other traffic.
         </p>
       </Section>
 
-      <Section title="Arrivals" note={`Before and after En route; there is no live schedule. Past (greyed) is arrivals the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Times are ${iata} local; ~ marks an estimate.`}>
+      <Section title="Arrivals" note={`Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Times are ${iata} local; ~ marks an estimate.`}>
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.inbound} dir="inbound" iata={iata} />}
       </Section>
 
