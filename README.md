@@ -158,6 +158,8 @@ The Vercel site is the same Dive, for viewers without MotherDuck access. `web/` 
 
 The MotherDuck token never reaches the browser. The page fetches each table its SQL names from `api/index.py` (`/api/tables/<schema>.<table>`), which exports it from MotherDuck as Parquet, trimmed to the last 31 days where the Dive needs no more, and Vercel's edge caches it for 10 minutes (browsers revalidate on every load). Only the tables in its allow-list can be fetched. Each export must stay under Vercel's 4.5 MB response limit; `fct_arrivals` is about 30 KB per 1,000 rows.
 
+`/api/snapshot/<icao>` serves the same marts as JSON for one airport, for clients without DuckDB: the airport list, current conditions, 24 hours of hourly weather, NOTAMs in force, median terminal times and the 30-day callsign history the Dive's boards are predicted from. `/api/tracks/<icao>` adds the observed arrival and departure paths of the last 3 days, one coordinate list per track, for a map. Both are edge-cached like the tables. The iOS ramp app (a separate repository, `motherduck_aviation_data_ios`) reads them together with `/api/live/<icao>`.
+
 Vercel builds from `vercel.json`: `yarn build` in `web/` for the static site, and `api/index.py` as a Python function with its own `api/requirements.txt` (duckdb, fastapi). The project needs `MOTHERDUCK_TOKEN` set in its environment variables. To run it locally against the local warehouse:
 
 ```bash
