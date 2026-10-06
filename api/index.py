@@ -20,14 +20,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Vercel's Python sandbox doesn't set $HOME, which duckdb needs (for its extension
 # cache, the motherduck extension in particular) before it will attach an md: target.
@@ -381,3 +384,167 @@ def live(icao: str) -> JSONResponse:
         return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
                              "failed": failures}, headers=LIVE_HEADERS)
     return _live_error(502, "; ".join(failures))
+
+
+# --- Live schedule -------------------------------------------------------------------
+
+# Airline schedules with live status, for the airports that publish them. The warehouse has
+# no timetable (OpenSky observes aircraft; AeroDataBox fills only days OpenSky missed), so
+# this asks the airport and the edge caches each airport's answer for 3 minutes. Airports
+# without a source answer `available: false`, and clients keep predicting from each
+# callsign's usual time.
+#   VHHH  Airport Authority Hong Kong open data (data.gov.hk "Flight Information"): free,
+#         no key. Yesterday's late flights, today and tomorrow, passenger and cargo, with
+#         stands for passenger arrivals and gates for passenger departures.
+# Not yet: EHAM from Schiphol's Public Flight API (free, needs an app id and key) and the
+# other airports from AeroDataBox (paid units).
+SCHEDULE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Vercel-CDN-Cache-Control": "max-age=180",
+    "Access-Control-Allow-Origin": "*",
+}
+# Flights whose scheduled, estimated or actual time falls in this window around now.
+SCHEDULE_PAST = timedelta(hours=6)
+SCHEDULE_NEXT = timedelta(hours=18)
+
+HKIA_URL = "https://www.hongkongairport.com/flightinfo-rest/rest/flights"
+# Status prefix -> state, and whether the time after it is an estimate or an actual.
+# "Boarding Soon" before "Boarding".
+HKIA_STATES = (
+    ("At gate", "at_gate", "actual"),
+    ("Landed", "landed", "actual"),
+    ("Dep", "departed", "actual"),
+    ("Est at", "estimated", "estimated"),
+    ("Cancelled", "cancelled", None),
+    ("Delayed", "delayed", None),
+    ("Boarding Soon", "boarding_soon", None),
+    ("Boarding", "boarding", None),
+    ("Final Call", "final_call", None),
+    ("Gate Closed", "gate_closed", None),
+)
+# "15:02", or "23:08 (06/10/2026)" when the day differs from the scheduled one.
+_HKIA_TIME = re.compile(r"(\d{1,2}):(\d{2})(?:\s*\((\d{2})/(\d{2})/(\d{4})\))?")
+# Operating flight number: two-character IATA airline code, then the number.
+_FLIGHT_NO = re.compile(r"([A-Z0-9]{2})\s*0*(\d{1,4})")
+
+
+def _iso(at: datetime | None) -> str | None:
+    return None if at is None else at.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _blank(v) -> str | None:
+    v = (v or "").strip() if isinstance(v, str) else v
+    return v or None
+
+
+def _hkia_time(text: str, day: date, tz: ZoneInfo) -> datetime | None:
+    m = _HKIA_TIME.search(text)
+    if not m:
+        return None
+    hh, mm, dd, mo, yyyy = m.groups()
+    on = date(int(yyyy), int(mo), int(dd)) if dd else day
+    return datetime(on.year, on.month, on.day, int(hh), int(mm), tzinfo=tz)
+
+
+def hkia_flights(payload: list[dict], arrival: bool, cargo: bool, tz: ZoneInfo) -> list[dict]:
+    """One HKIA board (arrivals or departures, passenger or cargo) as schedule rows."""
+    rows = []
+    for day_board in payload:
+        day = date.fromisoformat(day_board["date"])
+        for f in day_board.get("list") or []:
+            hh, mm = (int(x) for x in f["time"].split(":"))
+            scheduled = datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz)
+            status = (f.get("status") or "").strip()
+            state, estimated, actual = ("scheduled" if not status else "other"), None, None
+            for prefix, name, kind in HKIA_STATES:
+                if status.startswith(prefix):
+                    state = name
+                    at = _hkia_time(status[len(prefix):], day, tz) if kind else None
+                    estimated, actual = (at, None) if kind == "estimated" else (None, at)
+                    break
+            numbers = [n["no"].replace(" ", "") for n in f.get("flight") or []]
+            if not numbers:
+                continue
+            operating = f["flight"][0]
+            airline = _blank(operating.get("airline"))
+            m = _FLIGHT_NO.fullmatch(operating["no"].strip())
+            route = f.get("origin" if arrival else "destination") or []
+            rows.append({
+                "dir": "inbound" if arrival else "outbound",
+                "flight": numbers[0],
+                "codeshares": numbers[1:],
+                # As ADS-B callsigns once leading zeros are dropped: CPA0710 and CPA710 alike.
+                "callsign": f"{airline}{m.group(2)}" if airline and len(airline) == 3 and m else None,
+                "airline_icao": airline,
+                "other": route[0] if route else None,
+                "route": route,
+                "scheduled_at": _iso(scheduled),
+                "estimated_at": _iso(estimated),
+                "actual_at": _iso(actual),
+                "state": state,
+                "status": status or None,
+                "stand": _blank(f.get("stand")),
+                "gate": _blank(f.get("gate")),
+                "belt": _blank(f.get("baggage")),
+                "terminal": _blank(f.get("terminal")),
+                "cargo": cargo,
+            })
+    return rows
+
+
+def _in_window(row: dict, now: datetime) -> bool:
+    times = [datetime.fromisoformat(t) for t in (row["scheduled_at"], row["estimated_at"], row["actual_at"]) if t]
+    return any(now - SCHEDULE_PAST <= t <= now + SCHEDULE_NEXT for t in times)
+
+
+def _hkia(tz: ZoneInfo, now: datetime) -> tuple[list[dict], list[str]]:
+    today = now.astimezone(tz).date()
+    boards = [(arrival, cargo) for arrival in (True, False) for cargo in (False, True)]
+
+    def fetch(board: tuple[bool, bool]) -> list[dict]:
+        arrival, cargo = board
+        query = urllib.parse.urlencode({"span": 2, "date": today.isoformat(), "lang": "en",
+                                        "cargo": str(cargo).lower(), "arrival": str(arrival).lower()})
+        return hkia_flights(_get_json(f"{HKIA_URL}?{query}", UA, timeout=8), arrival, cargo, tz)
+
+    rows, failures = [], []
+    with ThreadPoolExecutor(len(boards)) as pool:
+        for (arrival, cargo), future in zip(boards, [pool.submit(fetch, b) for b in boards]):
+            try:
+                rows += future.result()
+            except Exception as exc:  # keep the boards that did load
+                name = f"{'cargo ' if cargo else ''}{'arrivals' if arrival else 'departures'}"
+                failures.append(f"{name}: {_why(exc)}")
+    if failures and not rows:
+        raise RuntimeError("; ".join(failures))
+    return rows, failures
+
+
+SCHEDULE_SOURCES = {
+    "VHHH": ("Airport Authority Hong Kong", _hkia),
+}
+
+
+@app.get("/api/schedule/{icao}")
+def schedule(icao: str) -> JSONResponse:
+    icao = icao.upper()
+    cur = get_connection().cursor()
+    try:
+        row = cur.execute("select timezone from reference.airports where icao = ?", [icao]).fetchone()
+    finally:
+        cur.close()
+    if row is None:
+        return _live_error(404, f"unknown airport {icao!r}")
+    now = datetime.now(timezone.utc)
+    body = {"time": int(now.timestamp()), "available": False, "source": None, "flights": [], "failed": []}
+    if icao not in SCHEDULE_SOURCES:
+        return JSONResponse(body, headers=SCHEDULE_HEADERS)
+    name, fetch = SCHEDULE_SOURCES[icao]
+    try:
+        rows, failures = fetch(ZoneInfo(row[0]), now)
+    except Exception as exc:
+        print(f"schedule {icao}: {exc}")
+        return _live_error(502, f"{name}: {exc}")
+    rows = sorted((r for r in rows if _in_window(r, now)), key=lambda r: r["scheduled_at"])
+    body.update(available=True, source=name, flights=rows, failed=failures)
+    return JSONResponse(body, headers=SCHEDULE_HEADERS)
