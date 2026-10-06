@@ -17,6 +17,7 @@ setup:
 ingest-weather:
 	aviation ingest metar
 	aviation ingest taf
+	aviation ingest wx-extra
 
 ingest-notams:
 	aviation ingest notam

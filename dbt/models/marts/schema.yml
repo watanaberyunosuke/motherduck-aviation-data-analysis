@@ -145,6 +145,27 @@ models:
         tests: [not_null]
       - name: notams_in_force
         description: Null where the airport has no NOTAM feed (unknown, not zero).
+      - name: temp_c
+        description: >
+          A fresh (under 2 h) METAR's own temperature; otherwise the best of the national
+          weather service, Open-Meteo and MET Norway (raw.wx_extra, under 3 h old), then the
+          stale METAR. temp_source says which.
+      - name: temp_source
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['metar', 'gov', 'open-meteo', 'met.no']
+      - name: dewpoint_source
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['metar', 'gov', 'open-meteo', 'met.no']
+      - name: wx_text
+        description: >
+          Weather text from outside the METAR, only while the METAR is missing or over 2 h
+          old. Null while a fresh METAR has no present-weather group (wx_string null: "Nil").
+      - name: sunrise_local
+        description: Today's sunrise, HH:MM local time at the airport (MET Norway or computed).
 
   - name: fct_terminal_tracks
     description: >

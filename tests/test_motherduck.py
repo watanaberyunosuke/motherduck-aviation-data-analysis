@@ -23,7 +23,7 @@ deploy = _load("deploy_motherduck", ROOT / "scripts" / "deploy_motherduck.py")
 
 
 def test_scheduled_plan_is_weather_and_notams():
-    assert flight.pick_sources("") == ["metar", "taf", "notam-hk", "notam-faa-search"]
+    assert flight.pick_sources("") == ["metar", "taf", "wx-extra", "notam-hk", "notam-faa-search"]
 
 
 def test_sources_override():
