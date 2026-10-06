@@ -164,6 +164,11 @@ models:
         description: >
           Weather text from outside the METAR, only while the METAR is missing or over 2 h
           old. Null while a fresh METAR has no present-weather group (wx_string null: "Nil").
+      - name: procedures_url
+        description: >
+          Link to the airport's official procedure charts (SID/STAR) in its state's AIP, from
+          raw.procedure_links; procedures_kind says whether it points into the current AIRAC
+          cycle or at the AIP's front page. Null until the procedures step has run.
       - name: atis_text
         description: >
           ATIS page text last seen within 3 h (Hong Kong only, from the CAD's Internet ATIS);

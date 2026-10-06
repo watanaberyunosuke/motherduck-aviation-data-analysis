@@ -76,7 +76,7 @@ jobs:
             backfill-*)
               args=(--flight initial_load --config "STEPS=${SOURCE#backfill-}" --timeout-minutes 60) ;;
             scheduled) args=(--sources "") ;;
-            all)    args=(--sources "metar taf wx-extra atis-hk notam-hk notam-faa-search opensky aerodatabox") ;;
+            all)    args=(--sources "metar taf wx-extra atis-hk procedures notam-hk notam-faa-search opensky aerodatabox") ;;
             *)      args=(--sources "$SOURCE") ;;
           esac
           status=0
@@ -120,7 +120,7 @@ jobs:
           SOURCE: ${{ github.event_name == 'schedule' && 'hourly' || inputs.source || 'scheduled' }}
         run: |
           # Same plan as the Flight's PLAN.
-          plan="metar taf wx-extra atis-hk notam-hk notam-faa-search"
+          plan="metar taf wx-extra atis-hk procedures notam-hk notam-faa-search"
           flights=false
           case "$SOURCE" in
             # As the initial_load Flight: OpenSky gets the day's credits (the floor stops it).

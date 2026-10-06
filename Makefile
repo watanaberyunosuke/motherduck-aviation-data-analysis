@@ -19,6 +19,7 @@ ingest-weather:
 	aviation ingest taf
 	aviation ingest wx-extra
 	aviation ingest atis-hk
+	aviation ingest procedures
 
 ingest-notams:
 	aviation ingest notam

@@ -453,7 +453,8 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
 }
 
 // Official procedure charts (SID/STAR) are published as PDFs in each state's AIP; they are
-// linked here, not drawn or copied.
+// linked here, not drawn or copied. These are the fallback when the pipeline has not
+// resolved a link yet (fct_airport_conditions.procedures_url).
 const PROCEDURES: Record<string, { name: string; url: string }> = {
   YSSY: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
   YMML: { name: "Airservices Australia AIP", url: "https://www.airservicesaustralia.com/aip/aip.asp" },
@@ -1581,8 +1582,8 @@ export default function AirportConditions() {
               ? `${placed.length} live aircraft from ${live.source || "ADS-B"} (${count("inbound")} inbound, ${count("outbound")} outbound, ${count("ground")} on the ground here), updated ${clockParts(live.at, tz).time} ${iata} time. Hover an aircraft for its flight, route, altitude and speed.`
               : "Loading live positions…"}
           {" "}{tracks.length} tracked paths. Official SID/STAR charts are not drawn here.
-          {PROCEDURES[icao] && (
-            <> They are published in the <a href={PROCEDURES[icao].url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{PROCEDURES[icao].name}</a>.</>
+          {(wx?.procedures_url || PROCEDURES[icao]) && (
+            <> They are published in the <a href={wx?.procedures_url ?? PROCEDURES[icao].url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>{wx?.procedures_name ?? PROCEDURES[icao].name}</a>{wx?.procedures_kind === "cycle" ? " (current cycle)" : ""}.</>
           )}
         </p>
       </Section>
