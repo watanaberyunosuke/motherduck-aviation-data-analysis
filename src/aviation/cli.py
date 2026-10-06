@@ -38,7 +38,7 @@ def run(source: str, days: int | None = None, opensky_calls: int | None = None,
             print(f"{name}: FAILED - {exc}", file=sys.stderr)
             return False
 
-    # Weather is fetched twice a day, so each run covers the gap since the last one.
+    # Weather is fetched hourly; each run looks back far enough to cover missed runs.
     lookback = int(settings.weather.get("lookback_hours", 26))
     if source in ("metar", "all"):
         attempt("metar", lambda: aviationweather.ingest_metar(con, settings.icao_codes, lookback))

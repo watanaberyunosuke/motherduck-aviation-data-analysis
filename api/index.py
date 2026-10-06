@@ -19,6 +19,7 @@ Self-contained on purpose: no import of the `aviation` package. Reads only, neve
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -344,6 +345,78 @@ def _from_adsb_lol(lat: float, lon: float) -> list[dict]:
     } for a in payload.get("ac") or [] if a.get("lat") is not None and a.get("lon") is not None]
 
 
+# Direction of each live aircraft relative to the airport, worked out as the Dive does
+# (dives/airport_conditions/index.tsx, `placed`), so every client gets the same answer:
+# "inbound" / "outbound" from the callsign's last 30 days here, with the track agreeing
+# beyond 30 NM and, nearer in, a clear descent or climb deciding for callsigns flown both
+# ways; "ground" on the ground within 8 km; otherwise "other". It is the answer for this
+# fix alone: clients keep an airborne aircraft's earlier direction until it lands, which
+# this stateless function cannot.
+DIRECTION_SQL = """
+    select distinct callsign, 'inbound' as dir from marts.fct_arrivals
+    where arrival_icao = $1 and arrived_at >= now() - interval 30 day and callsign is not null
+    union
+    select distinct callsign, 'outbound' from marts.fct_departures
+    where departure_icao = $1 and departed_at >= now() - interval 30 day and callsign is not null
+"""
+# Kept per instance as long as the table exports are cached, so the 2-minute live calls do
+# not query the warehouse each time.
+DIRECTION_TTL_S = 10 * 60
+_directions: dict[str, tuple[float, dict[str, set[str]]]] = {}
+KM_PER_NM = 1.852
+
+
+def _callsign_dirs(icao: str) -> dict[str, set[str]]:
+    cached = _directions.get(icao)
+    if cached and time.time() - cached[0] < DIRECTION_TTL_S:
+        return cached[1]
+    cur = get_connection().cursor()
+    try:
+        rows = cur.execute(DIRECTION_SQL, [icao]).fetchall()
+    finally:
+        cur.close()
+    dirs: dict[str, set[str]] = {}
+    for callsign, d in rows:
+        dirs.setdefault(callsign, set()).add(d)
+    _directions[icao] = (time.time(), dirs)
+    return dirs
+
+
+def _dist_km(la1: float, lo1: float, la2: float, lo2: float) -> float:
+    r = math.pi / 180
+    h = (math.sin((la2 - la1) * r / 2) ** 2
+         + math.cos(la1 * r) * math.cos(la2 * r) * math.sin((lo2 - lo1) * r / 2) ** 2)
+    return 2 * 6371.0088 * math.asin(math.sqrt(h))
+
+
+def _bearing_deg(la1: float, lo1: float, la2: float, lo2: float) -> float:
+    r = math.pi / 180
+    y = math.sin((lo2 - lo1) * r) * math.cos(la2 * r)
+    x = (math.cos(la1 * r) * math.sin(la2 * r)
+         - math.sin(la1 * r) * math.cos(la2 * r) * math.cos((lo2 - lo1) * r))
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def direction(a: dict, lat: float, lon: float, dirs: dict[str, set[str]]) -> str:
+    km = _dist_km(a["lat"], a["lon"], lat, lon)
+    if a["on_ground"]:
+        return "ground" if km < 8 else "other"
+    seen = dirs.get(a["callsign"] or "", set())
+    # 0 = heading straight at the airport, 180 = straight away.
+    off = abs(((a["track_deg"] or 0) - _bearing_deg(a["lat"], a["lon"], lat, lon) + 540) % 360 - 180)
+    near = km < 30 * KM_PER_NM
+    vrate = a["vrate_fpm"]
+    if "inbound" in seen and "outbound" in seen:
+        if near and vrate is not None and abs(vrate) >= 300:
+            return "inbound" if vrate < 0 else "outbound"
+        return "inbound" if off < 90 else "outbound"
+    if "inbound" in seen and (near or off < 110):
+        return "inbound"
+    if "outbound" in seen and (near or off > 70):
+        return "outbound"
+    return "other"
+
+
 # After a source fails, skip it for a while in this instance, so viewers don't wait for
 # its timeout on every call (OpenSky times out from Vercel). It is retried afterwards.
 SKIP_AFTER_FAILURE_S = 15 * 60
@@ -381,6 +454,13 @@ def live(icao: str) -> JSONResponse:
             print(f"live {icao}: {failures[-1]}")
             continue
         _skip_until.pop(source, None)
+        try:
+            dirs = _callsign_dirs(icao)
+        except duckdb.Error as exc:  # positions are still worth sending without directions
+            print(f"live {icao}: no directions: {exc}")
+            dirs = None
+        for a in aircraft:
+            a["dir"] = None if dirs is None else direction(a, lat, lon, dirs)
         return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
                              "failed": failures}, headers=LIVE_HEADERS)
     return _live_error(502, "; ".join(failures))

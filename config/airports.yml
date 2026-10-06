@@ -55,9 +55,9 @@ aerodatabox:
   max_backfill_calls_per_run: 140
 
 weather:
-  # The scheduled run fetches weather twice a day (ingest.yml), so each METAR and TAF
-  # fetch covers this many hours: the 12 since the last run, with room for one run that
-  # GitHub's cron drops or delays.
+  # The scheduled run fetches weather every hour (ingest.yml), but GitHub's cron delays
+  # and drops runs (gaps of 5-8 h seen), so each METAR and TAF fetch covers this many
+  # hours.
   lookback_hours: 26
   # History loaded by `aviation backfill weather`: 30 days, all the Aviation Weather Center
   # serves. (More than 30 would take older METARs from the IEM archive.)
