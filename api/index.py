@@ -11,6 +11,9 @@ ADS-B sources do not allow browser requests from other sites. OpenSky is tried f
 if it fails (it times out from Vercel's servers), adsb.lol answers instead. Each
 airport's answer is cached at the edge for 2 minutes, so all viewers share one call.
 
+/api/snapshot/<icao> answers clients without DuckDB (the iOS ramp app) with one airport's
+conditions, NOTAMs, recent weather and callsign history as JSON, from the same SQL.
+
 Self-contained on purpose: no import of the `aviation` package. Reads only, never writes.
 """
 from __future__ import annotations
@@ -22,6 +25,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 # Vercel's Python sandbox doesn't set $HOME, which duckdb needs (for its extension
@@ -88,6 +93,166 @@ def table(name: str) -> Response:
             cur.close()
         body = path.read_bytes()
     return Response(body, media_type="application/vnd.apache.parquet", headers=CACHE_HEADERS)
+
+
+# --- Airport snapshot (JSON) ------------------------------------------------------------
+# One airport's current state in one small JSON document, for clients without DuckDB
+# (the iOS ramp app). The SQL mirrors the Dive's queries, so both read the marts the same
+# way; the client combines it with /api/live for its arrival and departure boards.
+
+def _json_value(v):
+    if isinstance(v, datetime):
+        # TIMESTAMPTZ comes back aware; anything naive is UTC (dbt forces TimeZone UTC).
+        return (v if v.tzinfo else v.replace(tzinfo=timezone.utc)).isoformat(timespec="seconds")
+    if isinstance(v, date):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    return v
+
+
+def _rows(cur: duckdb.DuckDBPyConnection, sql: str, params: list | None = None) -> list[dict]:
+    cur.execute(sql, params or [])
+    names = [d[0] for d in cur.description]
+    return [{k: _json_value(v) for k, v in zip(names, row)} for row in cur.fetchall()]
+
+
+SNAPSHOT_SQL = {
+    "airports": """
+        select icao, iata, name, timezone, lat, lon, notam_source
+        from reference.airports
+        order by iata
+    """,
+    "conditions": """
+        select *, date_diff('minute', metar_observed_at, now()) as metar_age_min
+        from marts.fct_airport_conditions
+        where icao = ?
+    """,
+    # 24 hours is enough for a shift's trend (wind, gusts, temperature).
+    "weather": """
+        select hour_utc, observed_at, flight_category, wind_dir_deg, wind_variable,
+               wind_speed_kt, wind_gust_kt, visibility_sm, ceiling_ft, wx_string,
+               has_thunderstorm, has_precipitation, temp_c, dewpoint_c
+        from marts.fct_airport_weather_hourly
+        where icao = ? and hour_utc >= now() - interval 24 hour
+        order by hour_utc
+    """,
+    # The NOTAMs fct_airport_conditions.notams_in_force counts.
+    "notams": """
+        select notam_key, number, q_code, category, condition, starts_at, ends_at,
+               is_permanent, is_estimated, schedule, body, raw_text, is_runway_closure
+        from marts.fct_notams
+        where location = ? and is_current
+        order by starts_at desc, number
+    """,
+    # Median minutes inside the 50 NM terminal area, for ETAs from live positions.
+    "medians": """
+        select
+          (select median(terminal_minutes) from marts.fct_arrival_weather_impact
+           where arrival_icao = $1 and arrived_at >= now() - interval 30 day) as arrival_terminal_minutes,
+          (select median(departure_terminal_minutes) from marts.fct_departures
+           where departure_icao = $1 and departed_at >= now() - interval 30 day) as departure_terminal_minutes
+    """,
+}
+
+# Callsigns seen arriving at / departing from the airport in the last 30 days, with the
+# usual origin / destination and usual local time of day (minutes after midnight, the
+# median wrapped around midnight), as the Dive's historyQ. Flight numbers repeat daily,
+# so the client predicts its boards from these. {tz} comes from reference.airports.
+HISTORY_SQL = """
+    with seen as (
+      select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other,
+             arrived_at as seen_at
+      from marts.fct_arrivals
+      where arrival_icao = $1 and arrived_at >= now() - interval 30 day and callsign is not null
+      union all
+      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at
+      from marts.fct_departures
+      where departure_icao = $1 and departed_at >= now() - interval 30 day and callsign is not null
+    ),
+    timed as (
+      select *,
+        hour(seen_at at time zone '{tz}') * 60 + minute(seen_at at time zone '{tz}') as m,
+        arg_min(hour(seen_at at time zone '{tz}') * 60 + minute(seen_at at time zone '{tz}'), seen_at)
+          over (partition by callsign, dir) as ref
+      from seen
+    ),
+    history as (
+      select
+        callsign, dir, mode(other) as other, count(*) as n,
+        (((any_value(ref) + median(((((m - ref + 720) % 1440) + 1440) % 1440) - 720)) % 1440) + 1440) % 1440
+          as usual_min,
+        count(distinct cast(seen_at at time zone '{tz}' as date))
+          filter (where seen_at >= now() - interval 14 day) as days_14
+      from timed
+      group by callsign, dir
+    )
+    -- QFA627 -> QF627, as stg_opensky_flights does.
+    select h.*,
+           al.iata || ltrim(regexp_extract(h.callsign, '^[A-Z]{{3}}(\\d{{1,4}})$', 1), '0')
+             as flight_number_iata,
+           al.name as airline_name
+    from history h
+    left join reference.airlines al
+      on al.icao = regexp_extract(h.callsign, '^([A-Z]{{3}})\\d{{1,4}}$', 1)
+     and al.iata is not null
+    order by h.dir, h.usual_min
+"""
+
+
+@app.get("/api/snapshot/{icao}")
+def snapshot(icao: str) -> JSONResponse:
+    cur = get_connection().cursor()
+    try:
+        airports = _rows(cur, SNAPSHOT_SQL["airports"])
+        airport = next((a for a in airports if a["icao"] == icao.upper()), None)
+        if airport is None:
+            raise HTTPException(404, f"unknown airport {icao!r}")
+        icao = airport["icao"]
+        conditions = _rows(cur, SNAPSHOT_SQL["conditions"], [icao])
+        body = {
+            "generated_at": _json_value(datetime.now(timezone.utc)),
+            "airports": airports,
+            "conditions": conditions[0] if conditions else None,
+            "weather": _rows(cur, SNAPSHOT_SQL["weather"], [icao]),
+            "notams": _rows(cur, SNAPSHOT_SQL["notams"], [icao]),
+            "medians": _rows(cur, SNAPSHOT_SQL["medians"], [icao])[0],
+            "history": _rows(cur, HISTORY_SQL.format(tz=airport["timezone"]), [icao]),
+        }
+    except duckdb.Error as exc:
+        print(f"snapshot of {icao} failed: {exc}")
+        raise HTTPException(503, f"{icao} is not available yet") from exc
+    finally:
+        cur.close()
+    return JSONResponse(body, headers=CACHE_HEADERS)
+
+
+# Observed arrival and departure paths of tracked flights over the last 3 days, as the
+# Dive's map draws them (they trace the procedures in use). One compact line per track.
+TRACKS_SQL = """
+    select role,
+           any_value(coalesce(flight_number_iata, callsign, icao24)) as label,
+           any_value(departure_iata) as departure_iata,
+           any_value(arrival_iata) as arrival_iata,
+           list([round(lat, 4), round(lon, 4)] order by point_at) as points
+    from marts.fct_terminal_tracks
+    where airport_icao = ? and point_at >= now() - interval 3 day
+    group by role, icao24, track_start_epoch
+    order by role, min(point_at)
+"""
+
+
+@app.get("/api/tracks/{icao}")
+def tracks(icao: str) -> JSONResponse:
+    cur = get_connection().cursor()
+    try:
+        rows = _rows(cur, TRACKS_SQL, [icao.upper()])
+    except duckdb.Error as exc:
+        print(f"tracks of {icao} failed: {exc}")
+        raise HTTPException(503, f"{icao} is not available yet") from exc
+    finally:
+        cur.close()
+    return JSONResponse({"tracks": rows}, headers=CACHE_HEADERS)
 
 
 # --- Live positions -----------------------------------------------------------------
