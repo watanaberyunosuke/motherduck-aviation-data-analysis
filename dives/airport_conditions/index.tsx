@@ -185,6 +185,17 @@ function Tile({ label, value, color }: { label: string; value: ReactNode; color?
 
 // A flight as shown: its IATA flight number, else the ATC callsign (or transponder address)
 // muted, so a callsign never passes for a flight number.
+// The API tags freighters (is_freighter): an all-cargo operator, or a flight on the
+// airport's cargo board. Passenger flights may carry belly cargo too, so nothing is hidden.
+function FreighterTag() {
+  return (
+    <span title="Freighter: all-cargo operator or the airport's cargo board"
+      style={{ marginLeft: 6, border: `1px solid ${MUTED}`, color: MUTED, borderRadius: 4, padding: "0 4px", fontSize: 11, fontWeight: 600 }}>
+      Freighter
+    </span>
+  );
+}
+
 function FlightCode({ iata, callsign, icao24 }: { iata?: string | null; callsign?: string | null; icao24?: string | null }) {
   if (iata) return <span title={callsign ?? undefined}>{iata}</span>;
   if (callsign) return <span style={{ color: MUTED }} title={`${callsign}: ATC callsign, no IATA flight number for it`}>{callsign}</span>;
@@ -219,7 +230,8 @@ function mercator(lat: number, lon: number, z: number): [number, number] {
 }
 
 type Live = { icao24: string; callsign: string | null; lat: number; lon: number; alt_ft: number;
-  on_ground: boolean; speed_kt: number | null; track_deg: number | null; vrate_fpm: number | null };
+  on_ground: boolean; speed_kt: number | null; track_deg: number | null; vrate_fpm: number | null;
+  is_freighter?: boolean | null };
 
 // Live positions around the airport, refreshed every 2 minutes.
 function useLiveAircraft(icao: string) {
@@ -251,6 +263,7 @@ type Sched = {
   dir: Dir; flight: string; codeshares: string[]; callsign: string | null; other: string | null;
   scheduled_at: Date; estimated_at: Date | null; actual_at: Date | null;
   state: string; status: string | null; stand: string | null; gate: string | null; cargo: boolean;
+  is_freighter?: boolean;
 };
 // As the API sends it: times are ISO strings.
 type SchedJson = Omit<Sched, "scheduled_at" | "estimated_at" | "actual_at">
@@ -325,7 +338,7 @@ type Placed = Live & {
 type Dir = "inbound" | "outbound";
 // Per callsign and direction over the last 30 days: usual origin / destination, usual
 // local time (minutes after midnight) and days seen out of the last 14.
-type History = Map<string, Partial<Record<Dir, { other: string | null; usual: number; days: number }>>>;
+type History = Map<string, Partial<Record<Dir, { other: string | null; usual: number; days: number; freighter: boolean }>>>;
 
 // Delay status. OpenSky has no schedules, so "late" means later than the flight's usual
 // time at this airport over the last 30 days. Bands follow the 15-minute on-time convention.
@@ -722,6 +735,8 @@ type BoardLive = {
 // En route is flights still to arrive or depart: an arrival already on the ground here is
 // on the Arrivals board instead, while a departure on the ground is still to leave.
 const isEnRoute = (r: BoardLive) => !(r.dir === "inbound" && r.on_ground);
+// Tagged on the live feed, or on the airport's cargo board.
+const liveFreighter = (r: BoardLive) => Boolean(r.aircraft.is_freighter || r.sched?.is_freighter);
 // What the feed showed of a flight this visit.
 type Remembered = BoardLive & { last_at: Date; gone_at: Date | null; landed_at: Date | null };
 
@@ -755,6 +770,7 @@ type BoardRow = {
   status: string;          // "Late 22 min", "Boarding", "Expected, not yet within 500 NM"
   rag: Rag;                // unknown (grey) where there is no lateness
   where: string | null;    // stand (arrivals) or gate (departures); "Cargo" for freighters
+  freighter: boolean;      // tagged by the API (is_freighter)
   planned: string | null;  // scheduled time, or the usual time where there is no schedule
   local: string;           // "Est 15:09", "At gate 14:59", "Landed ~15:04", "–"
 };
@@ -781,6 +797,7 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     add({
       phase: "past", flight_iata: r.flight_iata, callsign: r.callsign, other: r.other, sort: (landed ?? now).getTime(),
       status: "Landed, on the ground", rag: "unknown", where: null, planned: r.usual, local: landed ? `Landed ~${at(landed)}` : "–",
+      freighter: liveFreighter(r),
     });
   }
 
@@ -797,6 +814,7 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
       phase: "past", flight_iata: m.flight_iata, callsign: m.callsign, other: m.other, sort: when.getTime(),
       status: arriving ? "Landed" : `Departed, ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
       rag: m.rag, where: null, planned: m.usual, local: `${arriving ? "Landed" : "Took off"} ~${at(when)}`,
+      freighter: liveFreighter(m),
     });
   }
 
@@ -812,7 +830,7 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
       phase: delta < 0 ? "past" : "next", flight_iata: flightIata(callsign), callsign, other: seen.other, sort: when.getTime(),
       status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}, not seen live`
         : arriving ? "Expected, not yet within 500 NM" : "Expected",
-      rag: "unknown", where: null, planned: hhmm(seen.usual), local: "–",
+      rag: "unknown", where: null, planned: hhmm(seen.usual), local: "–", freighter: seen.freighter,
     });
   }
   return out.sort((a, b) => a.sort - b.sort);
@@ -860,7 +878,7 @@ function scheduleBoard(dir: Dir, flights: Sched[], rows: BoardLive[], memory: Ma
       // Boarding, final call and so on still matter once there is an estimate.
       status: t && !["scheduled", "estimated", "at_gate", "landed", "departed", "other"].includes(s.state) ? `${state} · ${status}` : status,
       rag, where: (dir === "inbound" ? s.stand : s.gate) ?? (s.cargo ? "Cargo" : null),
-      planned: scheduled(s.scheduled_at), local,
+      planned: scheduled(s.scheduled_at), local, freighter: s.is_freighter ?? s.cargo,
     });
   }
   return out.sort((a, b) => a.sort - b.sort);
@@ -892,7 +910,7 @@ function Board({ rows, dir, iata, planned, showWhere }: {
           <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: color, marginRight: 6 }} />
           <span style={{ color, fontWeight: 600 }}>{r.status}</span>
         </td>
-        <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} /></td>
+        <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} />{r.freighter && <FreighterTag />}</td>
         <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
         {showWhere && <td style={td}>{r.where ?? "–"}</td>}
         <td style={{ ...num, color: showWhere ? undefined : MUTED }}>{r.planned ?? "–"}</td>
@@ -1166,11 +1184,12 @@ export default function AirportConditions() {
   // flights that operate most days.
   const historyQ = useSQLQuery(`
     with seen as (
-      select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other, arrived_at as seen_at
+      select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other, arrived_at as seen_at,
+             is_freighter
       from "aviation"."marts"."fct_arrivals"
       where arrival_icao = '${icao}' and arrived_at >= now() - interval 30 day and callsign is not null
       union all
-      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at
+      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at, is_freighter
       from "aviation"."marts"."fct_departures"
       where departure_icao = '${icao}' and departed_at >= now() - interval 30 day and callsign is not null
     ),
@@ -1182,7 +1201,7 @@ export default function AirportConditions() {
       from seen
     )
     select
-      callsign, dir, mode(other) as other, count(*) as n,
+      callsign, dir, mode(other) as other, count(*) as n, bool_or(is_freighter) as is_freighter,
       (((any_value(ref) + median(((((m - ref + 720) % 1440) + 1440) % 1440) - 720)) % 1440) + 1440) % 1440
         as usual_min,
       count(distinct cast(seen_at at time zone '${tz}' as date)) filter (where seen_at >= now() - interval 14 day)
@@ -1228,7 +1247,7 @@ export default function AirportConditions() {
     const m: History = new Map();
     for (const r of rowsOf(historyQ.data)) {
       const h = m.get(r.callsign) ?? {};
-      h[r.dir as Dir] = { other: r.other ?? null, usual: N(r.usual_min), days: N(r.days_14) };
+      h[r.dir as Dir] = { other: r.other ?? null, usual: N(r.usual_min), days: N(r.days_14), freighter: r.is_freighter === true };
       m.set(r.callsign, h);
     }
     return m;
@@ -1627,7 +1646,9 @@ export default function AirportConditions() {
                           {r.on_ground ? `On the ground${r.status_note ? ` · ${r.status_note}` : ""}` : ragText(a)}
                         </span>
                       </td>
-                      <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} icao24={a.icao24} /></td>
+                      <td style={{ ...td, fontWeight: 600 }}>
+                        <FlightCode iata={r.flight_iata} callsign={r.callsign} icao24={a.icao24} />{liveFreighter(r) && <FreighterTag />}
+                      </td>
                       <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
                       {schedule.source && (
                         <td style={td} title={inbound ? "Stand" : "Gate"}>

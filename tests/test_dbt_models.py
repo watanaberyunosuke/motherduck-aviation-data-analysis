@@ -390,3 +390,34 @@ def test_opensky_preferred_and_aerodatabox_fills_its_gaps_with_schedule_delay(bu
     moves = con.execute("""select day_utc::varchar, arrivals from marts.fct_daily_airport_movements
                            where icao = 'YBBN' order by day_utc""").fetchall()
     assert moves == [("2026-09-21", 1), ("2026-09-22", 1)]
+
+
+def test_freighters_tagged_by_cargo_operator_as_the_api_does(built, tmp_path):
+    con, _ = built
+    # The synthetic flights are all passenger callsigns, registrations or ATC callsigns.
+    for mart in ("fct_arrivals", "fct_departures"):
+        assert con.execute(f"select count(*) filter (where is_freighter), count(is_freighter), count(*) "
+                           f"from marts.{mart}").fetchone()[0] == 0
+
+    # The macro against sample callsigns, compiled by dbt and run on the built warehouse.
+    # dbt compiles against an empty file of the same name (the built one is open here), so
+    # the seed's relation names the same catalog.
+    samples = ["FDX5150", "CLX7", "UPS12AB", "CPA101", "QFA627", "VHABC", "FDX", "fdx5150", None]
+    values = ", ".join("(null)" if c is None else f"('{c}')" for c in samples)
+    db = Path(con.execute("select path from duckdb_databases() "
+                          "where database_name = current_database()").fetchone()[0])
+    compiled = subprocess.run(
+        ["dbt", "--quiet", "compile", "--profiles-dir", ".", "--inline",
+         f"select c, {{{{ is_freighter('c') }}}} as f from (values {values}) t(c)"],
+        cwd=ROOT / "dbt", env={**os.environ, "WAREHOUSE": str(tmp_path / db.name)},
+        capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stdout[-3000:]
+    tagged = dict(con.execute(compiled.stdout).fetchall())
+    assert {c for c, f in tagged.items() if f} == {"FDX5150", "CLX7", "UPS12AB"}
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("api_index", ROOT / "api" / "index.py")
+    api = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(api)
+    operators = frozenset(r[0] for r in con.execute("select icao from reference.cargo_operators").fetchall())
+    assert {c: api.is_freighter(c, operators) for c in samples} == tagged

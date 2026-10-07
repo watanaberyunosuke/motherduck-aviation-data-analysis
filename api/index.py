@@ -167,11 +167,11 @@ SNAPSHOT_SQL = {
 HISTORY_SQL = """
     with seen as (
       select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other,
-             arrived_at as seen_at
+             arrived_at as seen_at, is_freighter
       from marts.fct_arrivals
       where arrival_icao = $1 and arrived_at >= now() - interval 30 day and callsign is not null
       union all
-      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at
+      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at, is_freighter
       from marts.fct_departures
       where departure_icao = $1 and departed_at >= now() - interval 30 day and callsign is not null
     ),
@@ -184,7 +184,7 @@ HISTORY_SQL = """
     ),
     history as (
       select
-        callsign, dir, mode(other) as other, count(*) as n,
+        callsign, dir, mode(other) as other, count(*) as n, bool_or(is_freighter) as is_freighter,
         (((any_value(ref) + median(((((m - ref + 720) % 1440) + 1440) % 1440) - 720)) % 1440) + 1440) % 1440
           as usual_min,
         count(distinct cast(seen_at at time zone '{tz}' as date))
@@ -383,6 +383,32 @@ def _callsign_dirs(icao: str) -> dict[str, set[str]]:
     return dirs
 
 
+# All-cargo operators (reference.cargo_operators), cached like the directions. Live aircraft
+# and schedule rows are tagged with them as the marts' is_freighter column is
+# (dbt/macros/is_freighter.sql), so every client shows the same flights as freighters.
+_cargo_operators: tuple[float, frozenset[str]] | None = None
+_DESIGNATOR = re.compile(r"([A-Z]{3}).")
+
+
+def _cargo_ops() -> frozenset[str]:
+    global _cargo_operators
+    if _cargo_operators and time.time() - _cargo_operators[0] < DIRECTION_TTL_S:
+        return _cargo_operators[1]
+    cur = get_connection().cursor()
+    try:
+        ops = frozenset(r[0] for r in cur.execute("select icao from reference.cargo_operators").fetchall())
+    finally:
+        cur.close()
+    _cargo_operators = (time.time(), ops)
+    return ops
+
+
+def is_freighter(callsign: str | None, operators: frozenset[str]) -> bool:
+    """Flown by an all-cargo operator, matched on the callsign's ICAO designator."""
+    m = _DESIGNATOR.match(callsign or "")
+    return bool(m) and m.group(1) in operators
+
+
 def _dist_km(la1: float, lo1: float, la2: float, lo2: float) -> float:
     r = math.pi / 180
     h = (math.sin((la2 - la1) * r / 2) ** 2
@@ -460,8 +486,14 @@ def live(icao: str) -> JSONResponse:
         except duckdb.Error as exc:  # positions are still worth sending without directions
             print(f"live {icao}: no directions: {exc}")
             dirs = None
+        try:
+            ops = _cargo_ops()
+        except duckdb.Error as exc:  # likewise without freighter tags
+            print(f"live {icao}: no cargo operators: {exc}")
+            ops = None
         for a in aircraft:
             a["dir"] = None if dirs is None else direction(a, lat, lon, dirs)
+            a["is_freighter"] = None if ops is None else is_freighter(a["callsign"], ops)
         return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
                              "failed": failures}, headers=LIVE_HEADERS)
     return _live_error(502, "; ".join(failures))
@@ -573,6 +605,14 @@ def hkia_flights(payload: list[dict], arrival: bool, cargo: bool, tz: ZoneInfo) 
     return rows
 
 
+def tag_freighters(rows: list[dict], operators: frozenset[str]) -> None:
+    """Freighter: on the airport's cargo board, or flown by an all-cargo operator. The cargo
+    board also lists combination carriers' freighters (a Cathay freighter flies a CPA
+    callsign), which no operator list can tell apart from their passenger flights."""
+    for r in rows:
+        r["is_freighter"] = r["cargo"] or is_freighter(r["callsign"], operators)
+
+
 def _in_window(row: dict, now: datetime) -> bool:
     times = [datetime.fromisoformat(t) for t in (row["scheduled_at"], row["estimated_at"], row["actual_at"]) if t]
     return any(now - SCHEDULE_PAST <= t <= now + SCHEDULE_NEXT for t in times)
@@ -627,5 +667,11 @@ def schedule(icao: str) -> JSONResponse:
         print(f"schedule {icao}: {exc}")
         return _live_error(502, f"{name}: {exc}")
     rows = sorted((r for r in rows if _in_window(r, now)), key=lambda r: r["scheduled_at"])
+    try:
+        ops = _cargo_ops()
+    except duckdb.Error as exc:
+        print(f"schedule {icao}: no cargo operators: {exc}")
+        ops = frozenset()
+    tag_freighters(rows, ops)
     body.update(available=True, source=name, flights=rows, failed=failures)
     return JSONResponse(body, headers=SCHEDULE_HEADERS)

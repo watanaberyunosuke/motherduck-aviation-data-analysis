@@ -53,3 +53,14 @@ def test_one_way_needs_the_track_to_agree_beyond_30_nm():
 def test_unknown_callsign_is_other():
     assert direction(aircraft(10, 0, callsign="ABC123")) == "other"
     assert direction(aircraft(10, 0, callsign=None)) == "other"
+
+
+def test_freighters_by_cargo_operator_designator():
+    ops = frozenset({"FDX", "CLX"})
+    assert api.is_freighter("FDX5150", ops)
+    assert api.is_freighter("CLX7", ops)
+    # Passenger callsigns (which may carry belly cargo), registrations and blanks are not.
+    assert not api.is_freighter("CPA101", ops)
+    assert not api.is_freighter("FDX", ops)
+    assert not api.is_freighter("B1234", ops)
+    assert not api.is_freighter(None, ops)

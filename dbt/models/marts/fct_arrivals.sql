@@ -43,6 +43,7 @@ select
     icao24,
     first_seen_epoch,
     callsign,
+    {{ is_freighter('callsign') }}                                as is_freighter,
     flight_number_iata,
     airline_name,
     departure_icao,
