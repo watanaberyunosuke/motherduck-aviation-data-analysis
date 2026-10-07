@@ -7,8 +7,9 @@ browser) caches the file for 10 minutes. The pipeline lands new data hourly, so 
 fresh enough.
 
 It also proxies live aircraft positions around each airport (/api/live), because the
-ADS-B sources do not allow browser requests from other sites. OpenSky is tried first;
-if it fails (it times out from Vercel's servers), adsb.lol answers instead. Each
+ADS-B sources do not allow browser requests from other sites. OpenSky and adsb.lol are
+asked together: OpenSky's aircraft first, then adsb.lol's that OpenSky lacks; either
+answers alone if the other fails (OpenSky has timed out from Vercel's servers). Each
 airport's answer is cached at the edge for 2 minutes, so all viewers share one call.
 
 /api/snapshot/<icao> answers clients without DuckDB (the iOS ramp app) with one airport's
@@ -267,7 +268,8 @@ UA = {"User-Agent": "aviation-data-analysis (github.com/watanaberyunosuke/mother
 OPENSKY_TOKEN_URL = ("https://auth.opensky-network.org/auth/realms/opensky-network"
                      "/protocol/openid-connect/token")
 # Live traffic within 500 NM, so en route arrivals and departures show, not just the
-# terminal area. OpenSky gets a 16.6 x 16.6 degree box (3 credits: 100-400 square degrees).
+# terminal area (merge_live cuts both feeds to the circle). OpenSky gets a 16.6 x 16.6
+# degree box (3 credits: 100-400 square degrees).
 LIVE_RADIUS_NM = 500
 LIVE_BOX_DEG = 8.3
 LIVE_HEADERS = {
@@ -456,6 +458,29 @@ def _why(exc: Exception) -> str:
     return f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
 
 
+# Both sources are asked at once. OpenSky leads (around Hong Kong it saw about twice
+# adsb.lol's aircraft); adsb.lol adds the aircraft OpenSky lacks, matched on transponder
+# address. If one fails, the other answers alone.
+LIVE_SOURCES = (("OpenSky", _from_opensky), ("adsb.lol", _from_adsb_lol))
+
+
+def merge_live(feeds: list[list[dict] | None], lat: float, lon: float) -> list[dict]:
+    """Aircraft within LIVE_RADIUS_NM, each once: from the first feed that has it. OpenSky's
+    box reaches past the radius at its corners, so everything is cut to the circle."""
+    seen, out = set(), []
+    for feed in feeds:
+        for a in feed or []:
+            # adsb.lol marks non-ICAO addresses with "~"; kept, so they never match one.
+            key = (a["icao24"] or "").lower()
+            if not key or key in seen:
+                continue
+            if _dist_km(a["lat"], a["lon"], lat, lon) > LIVE_RADIUS_NM * KM_PER_NM:
+                continue
+            seen.add(key)
+            out.append(a)
+    return out
+
+
 @app.get("/api/live/{icao}")
 def live(icao: str) -> JSONResponse:
     cur = get_connection().cursor()
@@ -468,35 +493,42 @@ def live(icao: str) -> JSONResponse:
         return _live_error(404, f"unknown airport {icao!r}")
     lat, lon = row
 
-    failures = []
-    for source, fetch in (("OpenSky", _from_opensky), ("adsb.lol", _from_adsb_lol)):
-        if time.time() < _skip_until.get(source, 0):
-            failures.append(f"{source}: skipped after a recent failure")
-            continue
-        try:
-            aircraft = fetch(lat, lon)
-        except Exception as exc:  # network, HTTP or payload errors: try the next source
-            _skip_until[source] = time.time() + SKIP_AFTER_FAILURE_S
-            failures.append(f"{source}: {_why(exc)}")
-            print(f"live {icao}: {failures[-1]}")
-            continue
-        _skip_until.pop(source, None)
-        try:
-            dirs = _callsign_dirs(icao)
-        except duckdb.Error as exc:  # positions are still worth sending without directions
-            print(f"live {icao}: no directions: {exc}")
-            dirs = None
-        try:
-            ops = _cargo_ops()
-        except duckdb.Error as exc:  # likewise without freighter tags
-            print(f"live {icao}: no cargo operators: {exc}")
-            ops = None
-        for a in aircraft:
-            a["dir"] = None if dirs is None else direction(a, lat, lon, dirs)
-            a["is_freighter"] = None if ops is None else is_freighter(a["callsign"], ops)
-        return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
-                             "failed": failures}, headers=LIVE_HEADERS)
-    return _live_error(502, "; ".join(failures))
+    failures, fetched = [], {}
+    due = []
+    for name, fetch in LIVE_SOURCES:
+        if time.time() < _skip_until.get(name, 0):
+            failures.append(f"{name}: skipped after a recent failure")
+        else:
+            due.append((name, fetch))
+    with ThreadPoolExecutor(max(len(due), 1)) as pool:
+        for (name, _), future in zip(due, [pool.submit(fetch, lat, lon) for _, fetch in due]):
+            try:
+                fetched[name] = future.result()
+            except Exception as exc:  # network, HTTP or payload errors: the other source may answer
+                _skip_until[name] = time.time() + SKIP_AFTER_FAILURE_S
+                failures.append(f"{name}: {_why(exc)}")
+                print(f"live {icao}: {failures[-1]}")
+                continue
+            _skip_until.pop(name, None)
+    if not fetched:
+        return _live_error(502, "; ".join(failures))
+    aircraft = merge_live([fetched.get(name) for name, _ in LIVE_SOURCES], lat, lon)
+    try:
+        dirs = _callsign_dirs(icao)
+    except duckdb.Error as exc:  # positions are still worth sending without directions
+        print(f"live {icao}: no directions: {exc}")
+        dirs = None
+    try:
+        ops = _cargo_ops()
+    except duckdb.Error as exc:  # likewise without freighter tags
+        print(f"live {icao}: no cargo operators: {exc}")
+        ops = None
+    for a in aircraft:
+        a["dir"] = None if dirs is None else direction(a, lat, lon, dirs)
+        a["is_freighter"] = None if ops is None else is_freighter(a["callsign"], ops)
+    source = " + ".join(name for name, _ in LIVE_SOURCES if name in fetched)
+    return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
+                         "failed": failures}, headers=LIVE_HEADERS)
 
 
 # --- Live schedule -------------------------------------------------------------------

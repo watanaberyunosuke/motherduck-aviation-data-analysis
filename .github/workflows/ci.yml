@@ -41,7 +41,9 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # dbt build alone can take ~30 minutes now the marts have grown (ingest.yml allows the
+    # scheduled run 60); at 30 a cancelled build left new mart columns out of MotherDuck.
+    timeout-minutes: 60
     environment: production
     # Same group as ingest.yml: one writer at a time against the warehouse.
     concurrency:

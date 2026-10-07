@@ -231,7 +231,9 @@ function mercator(lat: number, lon: number, z: number): [number, number] {
 
 type Live = { icao24: string; callsign: string | null; lat: number; lon: number; alt_ft: number;
   on_ground: boolean; speed_kt: number | null; track_deg: number | null; vrate_fpm: number | null;
-  is_freighter?: boolean | null };
+  is_freighter?: boolean | null;
+  // The API's direction for this fix (api/index.py `direction`), from the same history.
+  dir?: "inbound" | "outbound" | "ground" | "other" | null };
 
 // Live positions around the airport, refreshed every 2 minutes.
 function useLiveAircraft(icao: string) {
@@ -1042,6 +1044,10 @@ export default function AirportConditions() {
 
   // ICAO -> IATA airline designators, to label live aircraft by flight number.
   const airlinesQ = useSQLQuery(`select icao, iata from "aviation"."reference"."airlines"`);
+  // All-cargo operators, to tag predicted board rows as the marts' is_freighter does. Kept
+  // out of the history query so directions never wait on a mart column (a dbt build that
+  // has not run yet once broke every direction).
+  const cargoQ = useSQLQuery(`select icao from "aviation"."reference"."cargo_operators"`);
 
   const hourlyQ = useSQLQuery(`
     select
@@ -1184,12 +1190,11 @@ export default function AirportConditions() {
   // flights that operate most days.
   const historyQ = useSQLQuery(`
     with seen as (
-      select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other, arrived_at as seen_at,
-             is_freighter
+      select callsign, 'inbound' as dir, coalesce(departure_iata, departure_icao) as other, arrived_at as seen_at
       from "aviation"."marts"."fct_arrivals"
       where arrival_icao = '${icao}' and arrived_at >= now() - interval 30 day and callsign is not null
       union all
-      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at, is_freighter
+      select callsign, 'outbound', coalesce(arrival_iata, arrival_icao), departed_at
       from "aviation"."marts"."fct_departures"
       where departure_icao = '${icao}' and departed_at >= now() - interval 30 day and callsign is not null
     ),
@@ -1201,7 +1206,7 @@ export default function AirportConditions() {
       from seen
     )
     select
-      callsign, dir, mode(other) as other, count(*) as n, bool_or(is_freighter) as is_freighter,
+      callsign, dir, mode(other) as other, count(*) as n,
       (((any_value(ref) + median(((((m - ref + 720) % 1440) + 1440) % 1440) - 720)) % 1440) + 1440) % 1440
         as usual_min,
       count(distinct cast(seen_at at time zone '${tz}' as date)) filter (where seen_at >= now() - interval 14 day)
@@ -1243,15 +1248,18 @@ export default function AirportConditions() {
   const kpi = rowsOf(kpiQ.data)[0];
   const depKpi = rowsOf(depKpiQ.data)[0];
 
+  const cargoOps = useMemo(() => new Set(rowsOf(cargoQ.data).map((r) => String(r.icao))), [cargoQ.data]);
   const history = useMemo(() => {
     const m: History = new Map();
     for (const r of rowsOf(historyQ.data)) {
       const h = m.get(r.callsign) ?? {};
-      h[r.dir as Dir] = { other: r.other ?? null, usual: N(r.usual_min), days: N(r.days_14), freighter: r.is_freighter === true };
+      const designator = /^([A-Z]{3})./.exec(String(r.callsign))?.[1];
+      h[r.dir as Dir] = { other: r.other ?? null, usual: N(r.usual_min), days: N(r.days_14),
+        freighter: designator !== undefined && cargoOps.has(designator) };
       m.set(r.callsign, h);
     }
     return m;
-  }, [historyQ.data]);
+  }, [historyQ.data, cargoOps]);
 
   // Direction of each airborne aircraft at the last fix, by airport and transponder address.
   // An arrival stays inbound until it lands, though downwind legs and holds point it away
@@ -1284,12 +1292,25 @@ export default function AirportConditions() {
       }
       else if (h?.inbound !== undefined && (near || off < 110)) dir = "inbound";
       else if (h?.outbound !== undefined && (near || off > 70)) dir = "outbound";
+      // No history here (a new or irregular flight, or the history query failed): the
+      // airport's schedule, where it lists the callsign one way only, with the same
+      // geometry check; else the API's answer, worked out server-side from history.
+      if (dir === "other" && !a.on_ground) {
+        const ways = new Set((a.callsign ? schedIndex.get(callsignKey(a.callsign)) ?? [] : [])
+          .filter((s) => s.state !== "cancelled"
+            && Math.abs(schedTime(s).getTime() - now.getTime()) <= SCHED_MATCH_MS)
+          .map((s) => s.dir));
+        if (ways.size === 1 && ways.has("inbound") && (near || off < 110)) dir = "inbound";
+        else if (ways.size === 1 && ways.has("outbound") && (near || off > 70)) dir = "outbound";
+        else if (a.dir === "inbound" || a.dir === "outbound") dir = a.dir;
+      }
       const key = `${icao}|${a.icao24}`;
       const prev = lastDir.current.get(key);
       // A descent near the airport overrides an earlier outbound: an arrival first seen
       // level on downwind, or a departure coming back. A climb never overrides inbound,
       // so a go-around stays an arrival.
-      if (!a.on_ground && prev && h?.[prev] !== undefined) {
+      // Without history (placed by schedule or API) the earlier direction holds as well.
+      if (!a.on_ground && prev && (h === undefined || h[prev] !== undefined)) {
         dir = prev === "outbound" && descending && h?.inbound !== undefined ? "inbound" : prev;
       }
       if (dir === "inbound" || dir === "outbound") lastDir.current.set(key, dir);
