@@ -1,0 +1,73 @@
+version: 2
+
+# Weekly version updates for every dependency manifest in the repo. Minor and patch
+# updates of each ecosystem land in one grouped PR; major updates get their own PRs.
+# .github/workflows/dependabot-auto-merge.yml squash-merges minor and patch updates
+# once main's required checks pass, and leaves majors for review.
+# Commit messages and PR titles are semantic: build(deps): / build(deps-dev): / ci(deps):.
+# The cooldown holds back releases younger than a few days, so a broken or compromised
+# release has time to be yanked before it is auto-merged (security updates skip it).
+
+updates:
+  # The pipeline, dbt and CI environment (pyproject.toml + uv.lock).
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      python:
+        update-types: [minor, patch]
+
+  # Pinned copies for the Vercel function and the MotherDuck Flights, which install
+  # from requirements.txt rather than uv.lock.
+  - package-ecosystem: pip
+    directories:
+      - /api
+      - /flights/aviation_pipeline
+      - /flights/initial_load
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      python:
+        update-types: [minor, patch]
+
+  # The Dive web app (Yarn 1).
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      # react, react-dom, react-is and their types only work at matching versions,
+      # so their majors move together too.
+      react:
+        patterns: ["react", "react-dom", "react-is", "@types/react", "@types/react-dom"]
+      web:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        update-types: [minor, patch]
