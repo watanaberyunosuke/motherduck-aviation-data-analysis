@@ -1450,7 +1450,10 @@ export default function AirportConditions() {
   const intro = (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: MUTED }}>GroundKit</div>
+          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
+        </div>
         <ThemeSwitch mode={theme.mode} onChange={theme.setMode} />
       </div>
       <p style={{ fontSize: 13, color: MUTED, margin: "4px 0 0" }}>
