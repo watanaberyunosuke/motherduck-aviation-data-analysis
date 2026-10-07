@@ -108,6 +108,12 @@ models:
           AeroDataBox has no actual time (arrival_time_is_scheduled).
       - name: callsign
         description: ICAO form as broadcast, e.g. QFA627.
+      - name: is_freighter
+        description: >
+          Flown by an all-cargo operator (cargo_operators seed, by callsign designator).
+          False for passenger flights, which may still carry belly cargo, and for
+          combination carriers' freighters, which fly passenger callsigns.
+        tests: [not_null]
       - name: flight_number_iata
         description: >
           IATA form, e.g. QF627. Null when the callsign is not an airline designator plus
@@ -130,6 +136,12 @@ models:
           departed_at minus scheduled_at. Null for OpenSky (no schedule) and where
           AeroDataBox has no actual time (departure_time_is_scheduled).
       - name: departure_iata
+        tests: [not_null]
+      - name: is_freighter
+        description: >
+          Flown by an all-cargo operator (cargo_operators seed, by callsign designator).
+          False for passenger flights, which may still carry belly cargo, and for
+          combination carriers' freighters, which fly passenger callsigns.
         tests: [not_null]
       - name: departure_terminal_minutes
         description: First airborne point to first point outside the terminal radius. Null without a well-covered track.

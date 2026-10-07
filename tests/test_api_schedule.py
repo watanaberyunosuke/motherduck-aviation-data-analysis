@@ -66,3 +66,12 @@ def test_window_keeps_late_flights_by_their_estimate():
     late = one(flight("08:00", "Est at 15:00 (06/10/2026)", origin=["SIN"]), date="2026-10-03")
     assert not api._in_window(old, now)
     assert api._in_window(late, now)
+
+
+def test_freighters_from_the_cargo_board_or_a_cargo_operator():
+    passenger = one(flight("10:00", no="CX 710", airline="CPA"))
+    cargo_board = api.hkia_flights(board("2026-10-06", flight("11:00", no="CX 2", airline="CPA")),
+                                   arrival=True, cargo=True, tz=HKG)[0]
+    operator = one(flight("12:00", no="FX 5150", airline="FDX"))
+    api.tag_freighters([passenger, cargo_board, operator], frozenset({"FDX"}))
+    assert [r["is_freighter"] for r in (passenger, cargo_board, operator)] == [False, True, True]
