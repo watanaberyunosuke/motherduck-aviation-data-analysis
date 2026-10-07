@@ -50,6 +50,7 @@ app = FastAPI()
 TABLES = {
     "reference.airports": "true",
     "reference.airlines": "true",
+    "reference.cargo_operators": "true",
     "marts.fct_airport_conditions": "true",
     "marts.fct_airport_weather_hourly": "hour_utc >= now() - interval 31 day",
     "marts.fct_daily_airport_movements": "day_utc >= current_date - 31",
