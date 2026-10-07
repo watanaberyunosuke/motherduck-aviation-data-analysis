@@ -148,6 +148,34 @@ models:
       - name: excess_departure_minutes
         description: departure_terminal_minutes minus the airport's rolling median (excluding the flight itself).
 
+  - name: fct_taxi_times
+    description: >
+      Taxi-out (off-block to take-off) and taxi-in (landing to on-block) per flight, where
+      the airport publishes gate times (Hong Kong): its board's off-block and on-block times
+      paired with OpenSky's first and last seen by callsign and time.
+    tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [direction, flight, scheduled_at]
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [opensky_flight_id]
+    columns:
+      - name: direction
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['departure', 'arrival']
+      - name: gate_at
+        description: Off-block (departures) or on-block (arrivals), from the airport's board.
+        tests: [not_null]
+      - name: runway_at
+        description: OpenSky first seen (departures) or last seen (arrivals).
+        tests: [not_null]
+      - name: taxi_minutes
+        description: Minutes between gate_at and runway_at; 1 to 90 out, 1 to 60 in.
+        tests: [not_null]
+
   - name: fct_airport_conditions
     description: One row per in-scope airport with its time zone and the latest METAR, TAF and NOTAM count.
     columns:

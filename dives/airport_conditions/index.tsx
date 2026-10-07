@@ -1156,6 +1156,19 @@ export default function AirportConditions() {
       and departed_at >= now() - interval 30 day
   `, ready);
 
+  // Taxi times where the airport publishes gate times (Hong Kong): off-block to take-off,
+  // landing to on-block (fct_taxi_times).
+  const taxiQ = useSQLQuery(`
+    select
+      avg(taxi_minutes) filter (where direction = 'departure') as taxi_out,
+      count(*) filter (where direction = 'departure')          as taxi_out_n,
+      avg(taxi_minutes) filter (where direction = 'arrival')   as taxi_in,
+      count(*) filter (where direction = 'arrival')            as taxi_in_n
+    from "aviation"."marts"."fct_taxi_times"
+    where airport_icao = '${icao}'
+      and gate_at >= now() - interval 30 day
+  `, ready);
+
   // Every observed departure on the latest local day with data, to any destination.
   const departuresQ = useSQLQuery(`
     with d as (
@@ -1247,6 +1260,11 @@ export default function AirportConditions() {
   const wx = rowsOf(conditionsQ.data)[0];
   const kpi = rowsOf(kpiQ.data)[0];
   const depKpi = rowsOf(depKpiQ.data)[0];
+  const taxi = rowsOf(taxiQ.data)[0];
+  // A taxi tile, only where there are taxi times: "19.6 min" over "Average taxi-out, 30 days · 8,412 flights".
+  const taxiTile = (label: string, minutes: unknown, n: unknown) => N(n) > 0 && (
+    <KPI label={`${label}, 30 days · ${N(n).toLocaleString()} flights`} value={`${N(minutes).toFixed(1)} min`} />
+  );
 
   const cargoOps = useMemo(() => new Set(rowsOf(cargoQ.data).map((r) => String(r.icao))), [cargoQ.data]);
   const history = useMemo(() => {
@@ -1710,7 +1728,7 @@ export default function AirportConditions() {
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.outbound} dir="outbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
-      <Section title="Arrivals, last 30 days">
+      <Section title="Arrivals, last 30 days" note="Taxi-in, where the airport publishes gate times (Hong Kong): OpenSky's last position, at or just before landing, to on-block on the airport's board.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 24 }}>
           {kpiQ.isLoading || !kpi ? <Skeleton h={56} /> : (
             <>
@@ -1719,6 +1737,7 @@ export default function AirportConditions() {
               <KPI label="Median excess terminal time" value={mins(kpi.median_excess)} />
               <KPI label="90th percentile excess" value={mins(kpi.p90_excess)} />
               <KPI label="Arrivals in IFR / LIFR" value={pct(kpi.ifr_arrival_share)} />
+              {taxiTile("Average taxi-in", taxi?.taxi_in, taxi?.taxi_in_n)}
             </>
           )}
         </div>
@@ -1896,7 +1915,7 @@ export default function AirportConditions() {
         )}
       </Section>
 
-      <Section title="Departures, last 30 days" note="Time to leave the terminal area: first airborne position to crossing 50 NM, against the airport's rolling 30-day median.">
+      <Section title="Departures, last 30 days" note="Time to leave the terminal area: first airborne position to crossing 50 NM, against the airport's rolling 30-day median. Taxi-out, where the airport publishes gate times (Hong Kong): off-block on the airport's board (its departure time) to OpenSky's first position, at or just after take-off.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 24 }}>
           {depKpiQ.isLoading || !depKpi ? <Skeleton h={56} /> : (
             <>
@@ -1906,6 +1925,7 @@ export default function AirportConditions() {
                 value={depKpi.median_minutes == null ? "–" : `${N(depKpi.median_minutes).toFixed(1)} min`} />
               <KPI label="Median excess vs baseline" value={mins(depKpi.median_excess)} />
               <KPI label="Departures in IFR / LIFR" value={pct(depKpi.ifr_share)} />
+              {taxiTile("Average taxi-out", taxi?.taxi_out, taxi?.taxi_out_n)}
             </>
           )}
         </div>

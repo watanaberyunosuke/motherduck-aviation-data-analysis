@@ -21,6 +21,11 @@ sources:
         description: >
           Hong Kong ATIS page text from the CAD's Internet ATIS, one row per distinct text
           (icao, text_hash) with first_seen_at / last_seen_at.
+      - name: hkia_flights
+        description: >
+          Hong Kong's flight boards (departures and arrivals, passenger and cargo), one row
+          per (direction, flight, scheduled_at), overwritten until the status is final.
+          gate_at is off-block ("Dep") for departures, on-block ("At gate") for arrivals.
       - name: sun_times
         description: Sunrise and sunset per airport and local day, from MET Norway or computed.
       - name: taf

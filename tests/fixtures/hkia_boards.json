@@ -1,0 +1,267 @@
+{
+ "requested": "2026-10-06",
+ "departures": [
+  {
+   "date": "2026-10-05",
+   "arrival": false,
+   "cargo": false,
+   "lastUpdatedTime": "2026-10-07T14:05:06+08:00",
+   "list": [
+    {
+     "time": "22:55",
+     "flight": [
+      {
+       "no": "HX 035",
+       "airline": "CRK"
+      },
+      {
+       "no": "TK 9213",
+       "airline": "THY"
+      }
+     ],
+     "status": "Dep 01:15 (06/10/2026)",
+     "statusCode": null,
+     "destination": [
+      "MEL"
+     ],
+     "terminal": "T2",
+     "aisle": "R",
+     "gate": "212"
+    }
+   ]
+  },
+  {
+   "date": "2026-10-06",
+   "arrival": false,
+   "cargo": false,
+   "lastUpdatedTime": "2026-10-07T14:05:06+08:00",
+   "list": [
+    {
+     "time": "00:05",
+     "flight": [
+      {
+       "no": "ZE 862",
+       "airline": "ESR"
+      }
+     ],
+     "status": "Dep 00:20",
+     "statusCode": null,
+     "destination": [
+      "ICN"
+     ],
+     "terminal": "T1",
+     "aisle": "J",
+     "gate": "46"
+    },
+    {
+     "time": "00:05",
+     "flight": [
+      {
+       "no": "CX 261",
+       "airline": "CPA"
+      }
+     ],
+     "status": "Dep 00:08",
+     "statusCode": null,
+     "destination": [
+      "CDG"
+     ],
+     "terminal": "T1",
+     "aisle": "C",
+     "gate": "26"
+    },
+    {
+     "time": "00:05",
+     "flight": [
+      {
+       "no": "CX 880",
+       "airline": "CPA"
+      },
+      {
+       "no": "MH 9190",
+       "airline": "MAS"
+      },
+      {
+       "no": "OM 5880",
+       "airline": "MGL"
+      },
+      {
+       "no": "AA 8933",
+       "airline": "AAL"
+      }
+     ],
+     "status": "Dep 23:56 (05/10/2026)",
+     "statusCode": null,
+     "destination": [
+      "LAX"
+     ],
+     "terminal": "T1",
+     "aisle": "A",
+     "gate": "41"
+    }
+   ]
+  }
+ ],
+ "arrivals": [
+  {
+   "date": "2026-10-05",
+   "arrival": true,
+   "cargo": false,
+   "lastUpdatedTime": "2026-10-07T14:05:21+08:00",
+   "list": [
+    {
+     "time": "04:50",
+     "flight": [
+      {
+       "no": "QF 087",
+       "airline": "QFA"
+      }
+     ],
+     "status": "At gate 04:19 (06/10/2026)",
+     "statusCode": null,
+     "origin": [
+      "SYD"
+     ],
+     "baggage": "3",
+     "hall": "A",
+     "terminal": "",
+     "stand": "W44"
+    }
+   ]
+  },
+  {
+   "date": "2026-10-06",
+   "arrival": true,
+   "cargo": false,
+   "lastUpdatedTime": "2026-10-07T14:05:21+08:00",
+   "list": [
+    {
+     "time": "00:10",
+     "flight": [
+      {
+       "no": "CX 636",
+       "airline": "CPA"
+      },
+      {
+       "no": "GF 4062",
+       "airline": "GFA"
+      },
+      {
+       "no": "AY 5852",
+       "airline": "FIN"
+      },
+      {
+       "no": "OM 5614",
+       "airline": "MGL"
+      },
+      {
+       "no": "FJ 5463",
+       "airline": "FJI"
+      }
+     ],
+     "status": "At gate 00:03",
+     "statusCode": null,
+     "origin": [
+      "SIN"
+     ],
+     "baggage": "9",
+     "hall": "A",
+     "terminal": "",
+     "stand": "W61"
+    },
+    {
+     "time": "00:15",
+     "flight": [
+      {
+       "no": "TW 639",
+       "airline": "TWB"
+      }
+     ],
+     "status": "At gate 00:24",
+     "statusCode": null,
+     "origin": [
+      "PUS"
+     ],
+     "baggage": "10",
+     "hall": "A",
+     "terminal": "",
+     "stand": "S31"
+    },
+    {
+     "time": "00:00",
+     "flight": [
+      {
+       "no": "UO 671",
+       "airline": "HKE"
+      },
+      {
+       "no": "CX 5671",
+       "airline": "CPA"
+      }
+     ],
+     "status": "At gate 23:41 (05/10/2026)",
+     "statusCode": null,
+     "origin": [
+      "NGO"
+     ],
+     "baggage": "3",
+     "hall": "A",
+     "terminal": "",
+     "stand": "D308R"
+    },
+    {
+     "time": "19:10",
+     "flight": [
+      {
+       "no": "HX 018D",
+       "airline": "CRK"
+      },
+      {
+       "no": "TK 9227",
+       "airline": "THY"
+      }
+     ],
+     "status": "Est at 22:21 (07/10/2026)",
+     "statusCode": null,
+     "origin": [
+      "SYD"
+     ],
+     "baggage": "",
+     "hall": "",
+     "terminal": "",
+     "stand": ""
+    }
+   ]
+  },
+  {
+   "date": "2026-10-07",
+   "arrival": true,
+   "cargo": false,
+   "lastUpdatedTime": "2026-10-07T14:05:21+08:00",
+   "list": [
+    {
+     "time": "00:00",
+     "flight": [
+      {
+       "no": "UO 671",
+       "airline": "HKE"
+      },
+      {
+       "no": "CX 5671",
+       "airline": "CPA"
+      }
+     ],
+     "status": "At gate 23:46 (06/10/2026)",
+     "statusCode": null,
+     "origin": [
+      "NGO"
+     ],
+     "baggage": "3",
+     "hall": "A",
+     "terminal": "",
+     "stand": "D306R"
+    }
+   ]
+  }
+ ]
+}
