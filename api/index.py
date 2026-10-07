@@ -12,7 +12,7 @@ asked together: OpenSky's aircraft first, then adsb.lol's that OpenSky lacks; ei
 answers alone if the other fails (OpenSky has timed out from Vercel's servers). Each
 airport's answer is cached at the edge for 2 minutes, so all viewers share one call.
 
-/api/snapshot/<icao> answers clients without DuckDB (the iOS ramp app) with one airport's
+/api/snapshot/<icao> answers clients without DuckDB (the GroundKit apps) with one airport's
 conditions, NOTAMs, recent weather and callsign history as JSON, from the same SQL.
 
 Self-contained on purpose: no import of the `aviation` package. Reads only, never writes.
@@ -103,7 +103,7 @@ def table(name: str) -> Response:
 
 # --- Airport snapshot (JSON) ------------------------------------------------------------
 # One airport's current state in one small JSON document, for clients without DuckDB
-# (the iOS ramp app). The SQL mirrors the Dive's queries, so both read the marts the same
+# (the GroundKit apps). The SQL mirrors the Dive's queries, so both read the marts the same
 # way; the client combines it with /api/live for its arrival and departure boards.
 
 def _json_value(v):
