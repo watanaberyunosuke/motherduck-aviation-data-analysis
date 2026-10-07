@@ -64,3 +64,25 @@ def test_freighters_by_cargo_operator_designator():
     assert not api.is_freighter("FDX", ops)
     assert not api.is_freighter("B1234", ops)
     assert not api.is_freighter(None, ops)
+
+
+def plane(icao24, nm_south=100, callsign="CPA710"):
+    return {**aircraft(nm_south, 0, callsign=callsign), "icao24": icao24}
+
+
+def test_merge_prefers_opensky_and_fills_in_from_adsb_lol():
+    opensky = [plane("780a1b", callsign="CPA710")]
+    adsb = [plane("780A1B", callsign="CPA710 dup"), plane("89901c", callsign="EVA851")]
+    merged = api.merge_live([opensky, adsb], *HKG)
+    assert [a["callsign"] for a in merged] == ["CPA710", "EVA851"]
+
+
+def test_merge_keeps_one_feed_when_the_other_failed():
+    assert len(api.merge_live([None, [plane("89901c")]], *HKG)) == 1
+
+
+def test_merge_cuts_to_the_radius_and_keeps_non_icao_addresses_apart():
+    far = plane("780a1c", nm_south=api.LIVE_RADIUS_NM + 20)  # an OpenSky box corner
+    tisb = plane("~780a1b")
+    merged = api.merge_live([[plane("780a1b"), far], [tisb]], *HKG)
+    assert [a["icao24"] for a in merged] == ["780a1b", "~780a1b"]
