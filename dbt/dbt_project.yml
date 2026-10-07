@@ -49,3 +49,11 @@ seeds:
         icao: varchar
         iata: varchar
         name: varchar
+    # All-cargo operators by ICAO designator, maintained by hand: clients tag their flights
+    # as freighters. Combination carriers (Cathay, Emirates...) fly freighters under their
+    # passenger callsigns, and their passenger flights carry belly cargo, so they are not
+    # listed; a cargo-only view would hide that work.
+    cargo_operators:
+      +column_types:
+        icao: varchar
+        name: varchar

@@ -18,3 +18,10 @@ def test_seed_iata_matches_airport_codes():
     codes = {r["icao"]: r["iata"] for r in csv.DictReader((SEED.parent / "airport_codes.csv").open())}
     seed = {r["icao"]: r["iata"] for r in csv.DictReader(SEED.open())}
     assert seed == {icao: codes[icao] for icao in seed}
+
+
+def test_cargo_operators_are_unique_icao_designators():
+    """Clients match the seed against the first three letters of a callsign."""
+    codes = [r["icao"] for r in csv.DictReader((SEED.parent / "cargo_operators.csv").open())]
+    assert codes and all(len(c) == 3 and c.isalpha() and c.isupper() for c in codes)
+    assert len(codes) == len(set(codes))
