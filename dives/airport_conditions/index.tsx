@@ -43,7 +43,13 @@ const DARK: typeof LIGHT = {
 };
 const cssVars = (p: typeof LIGHT) => Object.entries(p).map(([k, v]) => `--ac-${k}:${v};`).join("");
 const THEME_CSS = `.airport-conditions{${cssVars(LIGHT)}color-scheme:light}`
-  + `.airport-conditions[data-theme="dark"]{${cssVars(DARK)}color-scheme:dark}`;
+  + `.airport-conditions[data-theme="dark"]{${cssVars(DARK)}color-scheme:dark}`
+  // Departure stages: Boarding pulses, Final call flashes (about once a second, well under
+  // the 3 Hz flash limit). Still for readers who ask for reduced motion.
+  + `@keyframes ac-pulse{50%{opacity:.35}}@keyframes ac-flash{50%{opacity:.2}}`
+  + `.airport-conditions .ac-pulse{animation:ac-pulse 1.6s ease-in-out infinite}`
+  + `.airport-conditions .ac-flash{animation:ac-flash 1s steps(1,end) infinite}`
+  + `@media (prefers-reduced-motion:reduce){.airport-conditions .ac-pulse,.airport-conditions .ac-flash{animation:none}}`;
 const c = (k: keyof typeof LIGHT) => `var(--ac-${k})`;
 
 type ThemeMode = "auto" | "light" | "dark";
@@ -353,6 +359,8 @@ const ragOf = (delay: number | null): Rag =>
 const ragText = (a: Placed) =>
   a.delay_min == null ? "No usual time" : a.delay_min < -15 ? `Early ${Math.round(-a.delay_min)} min`
     : a.delay_min < 15 ? "On time" : `Late ${Math.round(a.delay_min)} min`;
+const RAG_ORDER: Rag[] = ["unknown", "green", "amber", "red"];
+const worseRag = (a: Rag, b: Rag) => (RAG_ORDER.indexOf(a) >= RAG_ORDER.indexOf(b) ? a : b);
 const OTHER_COLORS = { ground: c("ground"), other: c("other") };
 const markerColor = (a: Placed) =>
   a.dir === "inbound" || a.dir === "outbound" ? RAG_COLORS[a.rag] : OTHER_COLORS[a.dir];
@@ -733,6 +741,7 @@ type BoardLive = {
   callsign: string; dir: Dir; label: string; flight_iata: string | null; other: string | null; usual: string | null;
   on_ground: boolean; dist_nm: number; event_at: Date | null; rag: Rag; status_note: string | null;
   aircraft: Placed; sched: Sched | null;
+  stage?: Stage; flash?: Flash; detail?: string | null; // a departure on the ground here, on the airport's board
 };
 // En route is flights still to arrive or depart: an arrival already on the ground here is
 // on the Arrivals board instead, while a departure on the ground is still to leave.
@@ -775,12 +784,163 @@ type BoardRow = {
   freighter: boolean;      // tagged by the API (is_freighter)
   planned: string | null;  // scheduled time, or the usual time where there is no schedule
   local: string;           // "Est 15:09", "At gate 14:59", "Landed ~15:04", "–"
+  stage?: Stage;           // departures on the airport's board: progress through DEP_STAGES
+  flash?: Flash;
+  detail?: string | null;  // tooltip on the status: the minutes behind "Delayed"
 };
+
+// A time as the boards show it: "19:45", or "19:45 3 Oct" for another day than `now`'s.
+function boardTime(d: Date, now: Date, tz: string) {
+  const p = clockParts(d, tz);
+  const time = p.time.slice(0, 5);
+  return p.date === clockParts(now, tz).date ? time : `${time} ${p.date.split(" ").slice(1).join(" ")}`;
+}
 
 // Lateness of `t` against `planned`, in En route's words and colours.
 function lateness(t: Date, planned: Date): { status: string; rag: Rag } {
   const m = (t.getTime() - planned.getTime()) / 60_000;
   return { rag: ragOf(m), status: m < -15 ? `Early ${Math.round(-m)} min` : m < 15 ? "On time" : `Late ${Math.round(m)} min` };
+}
+
+// Moving on the ground here, from ADS-B ground speed: parked aircraft read 0-2 kt, taxiing
+// 5-30 kt, and a take-off roll passes 50 kt. The feed refreshes every 2 minutes.
+const TAXI_KT = 5;
+const TAKEOFF_KT = 50;
+const groundMove = (speed_kt: number | null) =>
+  speed_kt == null || speed_kt < TAXI_KT ? null : speed_kt < TAKEOFF_KT ? "Taxiing" : "Taking off";
+
+// A departure moves through these stages: the airport's board gives all but Taxiing, which
+// comes from the feed. Stage is the index of the one reached, null where there is none
+// (cancelled, or a status not recognised).
+const DEP_STAGES = ["Scheduled", "Boarding", "Final call", "Gate closed", "Taxiing", "Departed"] as const;
+type Stage = number | null;
+type Flash = "pulse" | "flash" | null;
+type DepStatus = { stage: Stage; status: string; rag: Rag; flash: Flash; detail: string | null };
+
+// Worded as an airport departure board: "Boarding", "Delayed · 13:45", "Departed", never
+// "Late 22 min" (the minutes are in the tooltip). Colour is the worse of what the stage
+// means for a passenger and how late the flight is:
+//   green  on time, boarding soon, boarding (pulses), taxiing on time;
+//   amber  final call (flashes), delayed, or 15-44 min late;
+//   red    gate closed, cancelled, or 45 min or more late;
+//   grey   departed, or no word from the airport past the scheduled time.
+// Not gone after the scheduled time, a flight is at least that late.
+// `ground`: the aircraft's ground speed where the feed sees it on the ground here.
+// `fmt`: a time as the board shows it ("13:45", or "01:10 8 Oct" on another day).
+function departureStatus(s: Sched, now: Date, fmt: (d: Date) => string, ground?: number | null): DepStatus {
+  const overdue = Math.max(0, (now.getTime() - s.scheduled_at.getTime()) / 60_000);
+  const pastDue = overdue >= 15 ? `${Math.round(overdue)} min past the scheduled ${fmt(s.scheduled_at)}` : null;
+  const at = (stage: number, status: string, rag: Rag, flash: Flash = null): DepStatus => ({
+    stage, status, flash, rag: worseRag(rag, ragOf(overdue)), detail: pastDue,
+  });
+  if (s.state === "departed") {
+    const l = s.actual_at ? lateness(s.actual_at, s.scheduled_at) : null;
+    // Hong Kong's "Dep" time is off-block (pushback): still on the ground here, the flight
+    // is taxiing out, stopped or not (holding short counts), on time if it pushed on time.
+    if (ground !== undefined) return {
+      stage: 4, status: groundMove(ground) ?? "Taxiing", rag: l?.rag ?? "unknown", flash: null,
+      detail: s.actual_at ? `Left the gate ${fmt(s.actual_at)}${l ? ` · ${l.status}` : ""}` : null,
+    };
+    return { stage: 5, status: "Departed", rag: "unknown", flash: null,
+      detail: s.actual_at ? `Left gate ${fmt(s.actual_at)}${l ? ` · ${l.status}` : ""}` : null };
+  }
+  // A tow to the gate moves too: movement counts once boarding is over, or from 30 min
+  // before the scheduled time.
+  const move = ground === undefined ? null : groundMove(ground);
+  const boardingNow = ["boarding_soon", "boarding", "final_call", "cancelled"].includes(s.state);
+  const due = now.getTime() >= s.scheduled_at.getTime() - 30 * 60_000;
+  if (move && !boardingNow && (s.state === "gate_closed" || due)) return at(4, move, "green");
+  switch (s.state) {
+    case "gate_closed": return at(3, "Gate closed", "red");
+    case "final_call": return at(2, "Final call", "amber", "flash");
+    case "boarding": return at(1, "Boarding", "green", "pulse");
+    case "boarding_soon": return at(0, "Boarding soon", "green");
+    case "delayed": return at(0, "Delayed", "amber");
+    case "cancelled": return { stage: null, status: "Cancelled", rag: "red", flash: null, detail: null };
+    case "estimated": {
+      if (!s.estimated_at) break;
+      const l = lateness(s.estimated_at, s.scheduled_at);
+      return { stage: 0, rag: l.rag, flash: null, detail: l.status,
+        status: l.rag === "green" ? "On time" : `Delayed · ${fmt(s.estimated_at)}` };
+    }
+    case "scheduled":
+      if (overdue < 15) return at(0, "On time", "green");
+      // Past its time with no update: delayed if the feed still sees it here, else unknown.
+      return ground !== undefined ? at(0, "Delayed", "green")
+        : { stage: 0, status: "Scheduled", rag: "unknown", flash: null, detail: `No update from the airport; ${pastDue}` };
+  }
+  return { stage: null, status: s.status ?? "–", rag: "unknown", flash: null, detail: null };
+}
+
+// The colour key above, for the Departures note.
+const DEPARTURE_KEY = `worded as the airport's own board, each flight moves ${DEP_STAGES.join(" → ")} (the pips; Taxiing is from the live feed), and its colour is the worse of the stage and its lateness against the scheduled time: green on time or boarding (pulsing), amber final call (flashing), delayed or 15-44 min late, red gate closed, cancelled or 45 min or more late, grey departed or no update past the scheduled time; hover a status for the minutes`;
+
+// An arrival moves through these stages: the airport's board gives Landed and At gate,
+// the feed Approaching (inside the 50 NM terminal area) and Taxiing in.
+const ARR_STAGES = ["Expected", "Approaching", "Landed", "Taxiing in", "At gate"] as const;
+// Where the feed sees the aircraft, if it does; `eta` while airborne.
+type FeedPos = { on_ground: boolean; dist_nm: number; speed_kt: number | null; eta: Date | null };
+
+// Worded as an airport arrivals board: "Expected 13:05", "Delayed · 13:45", "Landed",
+// "At gate". Colour is lateness against the scheduled time (green on time or early,
+// amber 15-44 min late, red 45 or more or cancelled); grey once at the gate, as departed.
+// Approaching pulses. Landing is measured against the scheduled (on-block) time, so it
+// reads a few minutes early.
+function arrivalStatus(s: Sched, now: Date, fmt: (d: Date) => string, feed?: FeedPos, landedAt?: Date | null): DepStatus {
+  const airborne = feed && !feed.on_ground;
+  const t = s.actual_at ?? landedAt ?? (airborne ? feed.eta : null) ?? s.estimated_at;
+  const l = t ? lateness(t, s.scheduled_at) : null;
+  const st = (stage: Stage, status: string, flash: Flash = null, rag: Rag = l?.rag ?? "unknown"): DepStatus =>
+    ({ stage, status, rag, flash, detail: l?.status ?? null });
+  if (s.state === "cancelled") return { stage: null, status: "Cancelled", rag: "red", flash: null, detail: null };
+  if (s.state === "at_gate") return st(4, "At gate", null, "unknown");
+  if (feed?.on_ground) return groundMove(feed.speed_kt) ? st(3, "Taxiing in") : st(2, "Landed");
+  if (s.state === "landed") return st(2, "Landed");
+  if (airborne) {
+    if (feed.dist_nm <= TERMINAL_NM) return st(1, "Approaching", "pulse");
+    return st(0, l && l.rag !== "green" ? "Delayed" : "Expected");
+  }
+  switch (s.state) {
+    case "delayed": return st(0, "Delayed", null, worseRag("amber", l?.rag ?? "unknown"));
+    case "estimated":
+      if (s.estimated_at) return st(0, `${l?.rag === "green" ? "Expected" : "Delayed ·"} ${fmt(s.estimated_at)}`);
+      break;
+    case "scheduled": {
+      const overdue = (now.getTime() - s.scheduled_at.getTime()) / 60_000;
+      if (overdue < 15) return st(0, "On time", null, "green");
+      return { stage: 0, status: "Scheduled", rag: "unknown", flash: null,
+        detail: `No update from the airport; ${Math.round(overdue)} min past the scheduled ${fmt(s.scheduled_at)}` };
+    }
+  }
+  return { stage: null, status: s.status ?? "–", rag: "unknown", flash: null, detail: null };
+}
+
+const ARRIVAL_KEY = `worded as the airport's own board, each flight moves ${ARR_STAGES.join(" → ")} (the pips; Approaching and Taxiing in are from the live feed), coloured by lateness against the scheduled time: green on time or early, amber 15-44 min late, red 45 min or more late or cancelled, grey at the gate or no update past the scheduled time; hover a status for the minutes`;
+
+// The status cell of every board: one pip per stage (DEP_STAGES or ARR_STAGES), filled up
+// to the stage reached (a dot where a row has no stage); then the status in the same colour.
+function StatusCell({ status, rag, stage, flash, detail, stages = DEP_STAGES }: {
+  status: string; rag: Rag; stage?: Stage; flash?: Flash; detail?: string | null; stages?: readonly string[];
+}) {
+  const color = RAG_COLORS[rag];
+  const cls = flash ? `ac-${flash}` : undefined;
+  const reached = stage == null ? "no stage" : stages[stage];
+  return (
+    <>
+      {stage === undefined ? (
+        <span className={cls} style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: color, marginRight: 6 }} />
+      ) : (
+        <span title={`${stages.join(" → ")} (${reached})`} style={{ display: "inline-flex", gap: 2, marginRight: 6, verticalAlign: "middle" }}>
+          {stages.map((name, i) => (
+            <span key={name} className={i === stage ? cls : undefined}
+              style={{ width: 5, height: 10, borderRadius: 1, background: stage != null && i <= stage ? color : c("rule") }} />
+          ))}
+        </span>
+      )}
+      {/* Final call flashes the words too; Boarding only pulses its pip. */}
+      <span className={flash === "flash" ? cls : undefined} title={detail ?? undefined} style={{ color, fontWeight: 600 }}>{status}</span>
+    </>
+  );
 }
 
 function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>, history: History,
@@ -796,9 +956,11 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
   if (arriving) for (const r of rows) {
     if (isEnRoute(r)) continue;
     const landed = memory.get(r.callsign)?.landed_at ?? null;
+    const taxiing = groundMove(r.aircraft.speed_kt) != null;
     add({
       phase: "past", flight_iata: r.flight_iata, callsign: r.callsign, other: r.other, sort: (landed ?? now).getTime(),
-      status: "Landed, on the ground", rag: "unknown", where: null, planned: r.usual, local: landed ? `Landed ~${at(landed)}` : "–",
+      status: taxiing ? "Taxiing in" : "Landed", stage: taxiing ? 3 : 2, flash: null, detail: "On the ground here, on the live feed",
+      rag: "unknown", where: null, planned: r.usual, local: landed ? `Landed ~${at(landed)}` : "–",
       freighter: liveFreighter(r),
     });
   }
@@ -814,7 +976,8 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     if (when.getTime() < cutoff) continue;
     add({
       phase: "past", flight_iata: m.flight_iata, callsign: m.callsign, other: m.other, sort: when.getTime(),
-      status: arriving ? "Landed" : `Departed, ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
+      status: arriving ? "Landed" : "Departed", stage: arriving ? 2 : 5, flash: null,
+      detail: arriving ? ragText(m.aircraft) : `${ragText(m.aircraft)}; ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
       rag: m.rag, where: null, planned: m.usual, local: `${arriving ? "Landed" : "Took off"} ~${at(when)}`,
       freighter: liveFreighter(m),
     });
@@ -830,8 +993,10 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     const when = new Date(now.getTime() + delta * 60_000);
     add({
       phase: delta < 0 ? "past" : "next", flight_iata: flightIata(callsign), callsign, other: seen.other, sort: when.getTime(),
-      status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}, not seen live`
-        : arriving ? "Expected, not yet within 500 NM" : "Expected",
+      status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}` : "Expected",
+      stage: delta < 0 ? (arriving ? 2 : 5) : 0, flash: null,
+      detail: delta < 0 ? `Not seen live; usually ${arriving ? "lands" : "departs"} ${hhmm(seen.usual)}`
+        : arriving ? "Not yet within 500 NM" : "Not yet seen on the live feed",
       rag: "unknown", where: null, planned: hhmm(seen.usual), local: "–", freighter: seen.freighter,
     });
   }
@@ -840,18 +1005,18 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
 
 // The board from the airport's own schedule: its flights from 3 hours ago to 6 hours ahead
 // by their latest time (actual, else estimated, else scheduled), minus those in En route.
-// Past is flights with an actual time, landed on the feed, or cancelled.
+// Past is flights with an actual time, landed on the feed, or cancelled. Status and colour
+// as the airport's board words them (departureStatus, arrivalStatus).
 function scheduleBoard(dir: Dir, flights: Sched[], rows: BoardLive[], memory: Map<string, Remembered>,
   now: Date, tz: string): BoardRow[] {
   const at = (d: Date) => clockParts(d, tz).time.slice(0, 5);
   // Another day's flight the airport still lists (delayed) shows its date: "19:45 3 Oct".
-  const today = clockParts(now, tz).date;
-  const scheduled = (d: Date) => {
-    const p = clockParts(d, tz);
-    return p.date === today ? at(d) : `${at(d)} ${p.date.split(" ").slice(1).join(" ")}`;
-  };
+  const scheduled = (d: Date) => boardTime(d, now, tz);
   const enRoute = new Set(rows.filter((r) => isEnRoute(r) && r.dir === dir).map((r) => callsignKey(r.callsign)));
   const landed = new Map(rows.filter((r) => !isEnRoute(r)).map((r) => [callsignKey(r.callsign), r]));
+  // Departures the feed saw airborne this visit, for their take-off time.
+  const tookOff = new Map([...memory.values()].filter((m) => m.dir === "outbound" && !m.on_ground && m.event_at)
+    .map((m) => [callsignKey(m.callsign), m.event_at!]));
   const from = now.getTime() - PAST_HOURS * 3_600_000, to = now.getTime() + NEXT_HOURS * 3_600_000;
   const out: BoardRow[] = [];
   for (const s of flights) {
@@ -860,16 +1025,13 @@ function scheduleBoard(dir: Dir, flights: Sched[], rows: BoardLive[], memory: Ma
     if (s.callsign && enRoute.has(s.callsign)) continue;
     const onGround = dir === "inbound" && s.callsign ? landed.get(s.callsign) : undefined;
     const landedAt = onGround && !s.actual_at ? memory.get(onGround.callsign)?.landed_at ?? null : null;
-    // Lateness where there is a time to measure (actual, the feed's landing, the airport's
-    // estimate); otherwise the airport's state.
-    const t = s.actual_at ?? landedAt ?? s.estimated_at;
-    const state = onGround && !s.actual_at ? "Landed, on the ground"
-      : ({ scheduled: "Scheduled", cancelled: "Cancelled", delayed: "Delayed", boarding_soon: "Boarding soon",
-          boarding: "Boarding", final_call: "Final call", gate_closed: "Gate closed" } as Record<string, string>)[s.state]
-        ?? s.status ?? "–";
-    const { status, rag } = t ? lateness(t, s.scheduled_at)
-      : { status: state, rag: (s.state === "cancelled" ? "red" : s.state === "delayed" ? "amber" : "unknown") as Rag };
-    const local = s.actual_at ? `${({ at_gate: "At gate", landed: "Landed", departed: "Departed" } as Record<string, string>)[s.state] ?? "Actual"} ${at(s.actual_at)}`
+    const st = dir === "outbound" ? departureStatus(s, now, scheduled)
+      : arrivalStatus(s, now, scheduled, onGround && { on_ground: true, dist_nm: onGround.dist_nm,
+          speed_kt: onGround.aircraft.speed_kt, eta: null }, landedAt);
+    // Hong Kong's departure time is off-block: "Left gate", then the feed's take-off.
+    const takeOff = s.state === "departed" && s.callsign ? tookOff.get(s.callsign) : undefined;
+    const local = takeOff ? `Took off ~${at(takeOff)}`
+      : s.actual_at ? `${({ at_gate: "At gate", landed: "Landed", departed: "Left gate" } as Record<string, string>)[s.state] ?? "Actual"} ${at(s.actual_at)}`
       : landedAt ? `Landed ~${at(landedAt)}`
       : onGround ? "Landed"
       : s.estimated_at ? `Est ${at(s.estimated_at)}` : "–";
@@ -877,9 +1039,8 @@ function scheduleBoard(dir: Dir, flights: Sched[], rows: BoardLive[], memory: Ma
       key: `${s.flight}|${s.scheduled_at.getTime()}`,
       phase: s.actual_at || onGround || (s.state === "cancelled" && s.scheduled_at <= now) ? "past" : "next",
       sort: when.getTime(), flight_iata: s.flight, callsign: s.callsign ?? s.flight, other: s.other,
-      // Boarding, final call and so on still matter once there is an estimate.
-      status: t && !["scheduled", "estimated", "at_gate", "landed", "departed", "other"].includes(s.state) ? `${state} · ${status}` : status,
-      rag, where: (dir === "inbound" ? s.stand : s.gate) ?? (s.cargo ? "Cargo" : null),
+      status: st.status, rag: st.rag, stage: st.stage, flash: st.flash, detail: st.detail,
+      where: (dir === "inbound" ? s.stand : s.gate) ?? (s.cargo ? "Cargo" : null),
       planned: scheduled(s.scheduled_at), local, freighter: s.is_freighter ?? s.cargo,
     });
   }
@@ -904,22 +1065,18 @@ function Board({ rows, dir, iata, planned, showWhere }: {
       </td>
     </tr>
   );
-  const row = (r: BoardRow) => {
-    const color = RAG_COLORS[r.rag];
-    return (
-      <tr key={r.key}>
-        <td style={td}>
-          <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: color, marginRight: 6 }} />
-          <span style={{ color, fontWeight: 600 }}>{r.status}</span>
-        </td>
-        <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} />{r.freighter && <FreighterTag />}</td>
-        <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
-        {showWhere && <td style={td}>{r.where ?? "–"}</td>}
-        <td style={{ ...num, color: showWhere ? undefined : MUTED }}>{r.planned ?? "–"}</td>
-        <td style={num}>{r.local}</td>
-      </tr>
-    );
-  };
+  const row = (r: BoardRow) => (
+    <tr key={r.key}>
+      <td style={td}>
+        <StatusCell status={r.status} rag={r.rag} stage={r.stage} flash={r.flash} detail={r.detail} stages={inbound ? ARR_STAGES : DEP_STAGES} />
+      </td>
+      <td style={{ ...td, fontWeight: 600 }}><FlightCode iata={r.flight_iata} callsign={r.callsign} />{r.freighter && <FreighterTag />}</td>
+      <td style={td}>{inbound ? `${r.other ?? "?"} → ${iata}` : `${iata} → ${r.other ?? "?"}`}</td>
+      {showWhere && <td style={td}>{r.where ?? "–"}</td>}
+      <td style={{ ...num, color: showWhere ? undefined : MUTED }}>{r.planned ?? "–"}</td>
+      <td style={num}>{r.local}</td>
+    </tr>
+  );
   const none = <tr><td colSpan={cols} style={{ ...td, color: MUTED }}>None</td></tr>;
   return (
     <div style={{ maxHeight: 640, overflowY: "auto" }}>
@@ -1356,13 +1513,27 @@ export default function AirportConditions() {
   // usual time (taxiing in, parked with the transponder on), departures within 3 h of theirs.
   const boardLive = useMemo((): BoardLive[] => {
     const nowMin = minuteOfDay(live.at ?? new Date(), tz);
+    const fmt = (d: Date) => boardTime(d, live.at ?? new Date(), tz);
     const rows: BoardLive[] = [];
     for (const a of placed) {
       if (!a.callsign) continue;
       const base = { callsign: a.callsign, label: a.label, flight_iata: a.flight_iata, on_ground: a.on_ground, dist_nm: a.dist_nm, aircraft: a, sched: a.sched };
       if (a.dir === "inbound" || a.dir === "outbound") {
+        // On the airport's board: its stage, as for the departure on the ground below.
+        // Airborne, a departure has departed whatever the board says yet; colour stays
+        // lateness, for the counts under the table.
+        // Off the board (no schedule, or a flight it does not list), the stage is the feed's
+        // and lateness is against the usual time, on hover.
+        const usualNote = a.usual ? `${ragText(a)} (usually ${a.usual})` : ragText(a);
+        const st = a.dir === "inbound"
+          ? (a.sched ? arrivalStatus(a.sched, live.at ?? new Date(), fmt,
+              { on_ground: false, dist_nm: a.dist_nm, speed_kt: a.speed_kt, eta: a.event_at })
+            : a.dist_nm <= TERMINAL_NM ? { stage: 1, status: "Approaching", flash: "pulse" as Flash, detail: usualNote }
+            : { stage: 0, status: a.rag === "amber" || a.rag === "red" ? "Delayed" : "Expected", flash: null, detail: usualNote })
+          : { stage: 5, status: "Departed", flash: null,
+              detail: a.sched?.actual_at ? `Left gate ${fmt(a.sched.actual_at)} · ${ragText(a)}` : a.sched ? ragText(a) : usualNote };
         rows.push({ ...base, dir: a.dir, other: a.other, usual: a.usual, event_at: a.event_at, rag: a.rag,
-          status_note: a.dir === "inbound" || a.delay_min != null ? ragText(a) : null });
+          status_note: st.status, stage: st.stage, flash: st.flash, detail: st.detail });
         continue;
       }
       if (a.dir !== "ground") continue;
@@ -1373,15 +1544,19 @@ export default function AirportConditions() {
       const near = (s: Sched | null) => s != null && Math.abs(schedTime(s).getTime() - now.getTime()) <= PAST_HOURS * 3_600_000;
       const sIn = schedFor(schedIndex, a.callsign, "inbound", now);
       const sOut = schedFor(schedIndex, a.callsign, "outbound", now);
-      const inOk = near(sIn), outOk = near(sOut) && sOut!.state !== "departed";
+      // The airport marks a departure gone at pushback; on the ground up to an hour later it
+      // is still taxiing out.
+      const taxiingOut = (s: Sched) => s.state === "departed" && s.actual_at != null
+        && now.getTime() - s.actual_at.getTime() <= 3_600_000;
+      const inOk = near(sIn), outOk = near(sOut) && (sOut!.state !== "departed" || taxiingOut(sOut!));
       if (inOk || outOk) {
         const gap = (s: Sched) => Math.abs(schedTime(s).getTime() - now.getTime());
         const dir: Dir = inOk && (!outOk || gap(sIn!) <= gap(sOut!)) ? "inbound" : "outbound";
         const s = (dir === "inbound" ? sIn : sOut)!;
-        const late = dir === "outbound" ? Math.max(0, (now.getTime() - s.scheduled_at.getTime()) / 60_000) : null;
+        // A departure waiting here: its stage on the airport's board, and how late it is.
+        const dep = dir === "outbound" ? departureStatus(s, now, fmt, a.speed_kt) : null;
         rows.push({ ...base, sched: s, dir, other: s.other, usual: h?.[dir] ? hhmm(h[dir]!.usual) : null, event_at: null,
-          rag: dir === "outbound" ? ragOf(late) : "unknown",
-          status_note: late != null && late >= 15 ? `Late ${Math.round(late)} min` : null });
+          rag: dep?.rag ?? "unknown", status_note: dep?.status ?? null, stage: dep?.stage, flash: dep?.flash, detail: dep?.detail });
         continue;
       }
       const arr = h?.inbound ? wrapMinutes(nowMin - h.inbound.usual) : null;   // minutes since usual arrival
@@ -1393,9 +1568,17 @@ export default function AirportConditions() {
       const seen = h![dir]!;
       // A departure still on the ground after its usual time is running late.
       const late = dir === "outbound" && dep! < 0 ? -dep! : null;
-      rows.push({ ...base, dir, other: seen.other, usual: hhmm(seen.usual), event_at: null,
+      const usual = hhmm(seen.usual);
+      // A departure waiting here off the board: Taxiing once the feed sees it moving, else
+      // On time or Delayed against its usual time, as the Departures board words it.
+      const move = dir === "outbound" ? groundMove(a.speed_kt) : null;
+      const isLate = late != null && late >= 15;
+      rows.push({ ...base, dir, other: seen.other, usual, event_at: null,
         rag: dir === "outbound" ? ragOf(late ?? 0) : "unknown",
-        status_note: late != null && late >= 15 ? `Late ${Math.round(late)} min` : null });
+        ...(dir === "outbound" ? {
+          status_note: move ?? (isLate ? "Delayed" : "On time"), stage: move ? 4 : 0, flash: null,
+          detail: isLate ? `Late ${Math.round(late!)} min (usually ${usual})` : `Usually departs ${usual}`,
+        } : { status_note: null }) });
     }
     return rows;
   }, [placed, history, live.at, tz, schedIndex]);
@@ -1406,8 +1589,8 @@ export default function AirportConditions() {
     r.dir === "inbound" ? r.aircraft.eta_min ?? r.dist_nm : 2e6 + (r.on_ground ? 0 : 1 + r.dist_nm);
   const enRoute = boardLive.filter(isEnRoute).sort((a, b) => enRouteOrder(a) - enRouteOrder(b));
   const ragCount = (rag: Rag) => enRoute.filter((r) => r.rag === rag).length;
-  const scheduleNote = (what: string) =>
-    `Before and after En route: ${what} on the ${schedule.source} live board, passenger and cargo, from ${PAST_HOURS} hours ago to ${NEXT_HOURS} hours ahead, refreshed every 3 minutes. Laid out like En route: status is lateness against the scheduled time (green under 15 min late, amber 15-44, red 45 or more), or the airport's state where it gives no time; ${iata} local is the airport's estimate or actual time. Flights on the live feed now are in En route.${schedule.error ? ` Last refresh failed (${schedule.error}).` : ""}`;
+  const scheduleNote = (what: "arrivals" | "departures") =>
+    `Before and after En route: ${what} on the ${schedule.source} live board, passenger and cargo, from ${PAST_HOURS} hours ago to ${NEXT_HOURS} hours ahead, refreshed every 3 minutes. Laid out like En route: ${what === "departures" ? DEPARTURE_KEY : ARRIVAL_KEY}; ${iata} local is the airport's estimate or actual time. Flights on the live feed now are in En route.${schedule.error ? ` Last refresh failed (${schedule.error}).` : ""}`;
   const boards = useMemo(() => {
     const now = live.at ?? new Date();
     return {
@@ -1633,7 +1816,7 @@ export default function AirportConditions() {
 
       <Section
         title="En route"
-        note="Flights within 500 NM that use this airport, in the air or on the ground here waiting to depart (arrivals on the ground are on the Arrivals board): what is happening now, between the past and coming-up flights on the boards below. Where the airport publishes a live schedule (Hong Kong), delay is against the scheduled time and the stand or gate is shown. Elsewhere there is no schedule, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
+        note="Flights within 500 NM that use this airport, in the air or on the ground here waiting to depart (arrivals on the ground are on the Arrivals board): what is happening now, between the past and coming-up flights on the boards below. Every flight shows its stage as the boards do: a departure waiting here its stage on the airport's board (or On time / Delayed against its usual time), Taxiing or Taking off once the feed sees it moving, then Departed; an arrival Expected or Delayed, then Approaching inside the 50 NM ring. Colour is lateness, with the minutes on hover. Where the airport publishes a live schedule (Hong Kong), delay is against the scheduled time and the stand or gate is shown; a flight the airport does not list (greyed time) is measured against its usual time. Elsewhere there is no schedule, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
       >
         {!live.at ? <Skeleton h={160} /> : enRoute.length === 0 ? (
           <Empty>{live.error ? "No live positions." : `No inbound or outbound flights for ${iata} recognised right now.`}</Empty>
@@ -1657,18 +1840,18 @@ export default function AirportConditions() {
                 {enRoute.map((r) => {
                   const a = r.aircraft;
                   const inbound = r.dir === "inbound";
-                  const color = RAG_COLORS[r.rag];
                   const hm = (d: Date) => clockParts(d, tz).time.slice(0, 5);
                   // Another day's flight shows its date.
-                  const day = (d: Date) => clockParts(d, tz).date;
-                  const hmDay = (d: Date) => day(d) === day(live.at ?? new Date()) ? hm(d) : `${hm(d)} ${day(d).split(" ").slice(1).join(" ")}`;
+                  const hmDay = (d: Date) => boardTime(d, live.at ?? new Date(), tz);
                   return (
                     <tr key={a.icao24}>
                       <td style={td}>
-                        <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5, background: color, marginRight: 6 }} />
-                        <span style={{ color, fontWeight: 600 }}>
-                          {r.on_ground ? `On the ground${r.status_note ? ` · ${r.status_note}` : ""}` : ragText(a)}
-                        </span>
+                        <StatusCell rag={r.rag} stage={r.stage} flash={r.flash} detail={r.detail}
+                          stages={inbound ? ARR_STAGES : DEP_STAGES}
+                          // On the airport's board: its stage alone, as the board words it.
+                          status={r.stage !== undefined && r.status_note ? r.status_note
+                            : !r.on_ground ? ragText(a)
+                            : `On the ground${r.status_note ? ` · ${r.status_note}` : ""}`} />
                       </td>
                       <td style={{ ...td, fontWeight: 600 }}>
                         <FlightCode iata={r.flight_iata} callsign={r.callsign} icao24={a.icao24} />{liveFreighter(r) && <FreighterTag />}
@@ -1688,7 +1871,8 @@ export default function AirportConditions() {
                         <td style={{ ...num, color: MUTED }} title={`Usual ${inbound ? "arrival" : "departure"}${schedule.source ? "; not on the airport's schedule" : ""}`}>{r.usual ?? "–"}</td>
                       )}
                       <td style={num}>
-                        {r.on_ground || !r.event_at ? "–"
+                        {r.on_ground && r.sched?.state === "departed" && r.sched.actual_at ? `Left gate ${hm(r.sched.actual_at)}`
+                          : r.on_ground || !r.event_at ? "–"
                           : inbound ? `ETA ${hm(r.event_at)} (${Math.round(a.eta_min ?? 0)} min)`
                           : `Took off ~${hm(r.event_at)}`}
                       </td>
@@ -1701,15 +1885,15 @@ export default function AirportConditions() {
         )}
         <p style={{ fontSize: 12, color: MUTED, margin: "8px 0 0" }}>
           {enRoute.filter((r) => r.dir === "inbound" && !r.on_ground).length} inbound, {enRoute.filter((r) => r.dir === "outbound" && !r.on_ground).length} outbound,{" "}
-          {enRoute.filter((r) => r.on_ground).length} on the ground here waiting to depart: {ragCount("green")} on time, {ragCount("amber")} amber, {ragCount("red")} red, {ragCount("unknown")} unknown. Flights that have not used {iata} in the last 30 days show as other traffic.
+          {enRoute.filter((r) => r.on_ground).length} on the ground here waiting to depart: {ragCount("green")} green, {ragCount("amber")} amber, {ragCount("red")} red, {ragCount("unknown")} grey. Flights that have not used {iata} in the last 30 days show as other traffic.
         </p>
       </Section>
 
-      <Section title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Status is lateness against the usual time where the feed saw the flight; ${iata} local is when it saw it land (~ marks an estimate).`}>
+      <Section title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Each flight moves ${ARR_STAGES.join(" → ")} as on the Hong Kong board (the pips; At gate needs the airport's board), from the live feed: Landed or Taxiing in once it is on the ground here, Presumed landed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes. ${iata} local is when it saw it land (~ marks an estimate).`}>
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.inbound} dir="inbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
-      <Section title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Status is lateness against the usual time where the feed saw the flight; ${iata} local is its estimated take-off (~).`}>
+      <Section title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Each flight moves ${DEP_STAGES.join(" → ")} as on the Hong Kong board (the pips), from the live feed, which cannot see boarding: Expected until it is seen, then Taxiing (in En route) and Departed, or Presumed departed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes and whether it left 500 NM or the feed. ${iata} local is its estimated take-off (~).`}>
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.outbound} dir="outbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
