@@ -1518,14 +1518,18 @@ export default function AirportConditions() {
         // On the airport's board: its stage, as for the departure on the ground below.
         // Airborne, a departure has departed whatever the board says yet; colour stays
         // lateness, for the counts under the table.
-        const st = !a.sched ? null : a.dir === "inbound"
-          ? arrivalStatus(a.sched, live.at ?? new Date(), fmt,
+        // Off the board (no schedule, or a flight it does not list), the stage is the feed's
+        // and lateness is against the usual time, on hover.
+        const usualNote = a.usual ? `${ragText(a)} (usually ${a.usual})` : ragText(a);
+        const st = a.dir === "inbound"
+          ? (a.sched ? arrivalStatus(a.sched, live.at ?? new Date(), fmt,
               { on_ground: false, dist_nm: a.dist_nm, speed_kt: a.speed_kt, eta: a.event_at })
+            : a.dist_nm <= TERMINAL_NM ? { stage: 1, status: "Approaching", flash: "pulse" as Flash, detail: usualNote }
+            : { stage: 0, status: a.rag === "amber" || a.rag === "red" ? "Delayed" : "Expected", flash: null, detail: usualNote })
           : { stage: 5, status: "Departed", flash: null,
-              detail: a.sched.actual_at ? `Left gate ${fmt(a.sched.actual_at)} · ${ragText(a)}` : ragText(a) };
+              detail: a.sched?.actual_at ? `Left gate ${fmt(a.sched.actual_at)} · ${ragText(a)}` : a.sched ? ragText(a) : usualNote };
         rows.push({ ...base, dir: a.dir, other: a.other, usual: a.usual, event_at: a.event_at, rag: a.rag,
-          status_note: st?.status ?? (a.dir === "inbound" || a.delay_min != null ? ragText(a) : null),
-          stage: st?.stage, flash: st?.flash, detail: st?.detail });
+          status_note: st.status, stage: st.stage, flash: st.flash, detail: st.detail });
         continue;
       }
       if (a.dir !== "ground") continue;
@@ -1560,10 +1564,17 @@ export default function AirportConditions() {
       const seen = h![dir]!;
       // A departure still on the ground after its usual time is running late.
       const late = dir === "outbound" && dep! < 0 ? -dep! : null;
-      const notes = [dir === "outbound" ? groundMove(a.speed_kt) : null, late != null && late >= 15 ? `Late ${Math.round(late)} min` : null];
-      rows.push({ ...base, dir, other: seen.other, usual: hhmm(seen.usual), event_at: null,
+      const usual = hhmm(seen.usual);
+      // A departure waiting here off the board: Taxiing once the feed sees it moving, else
+      // On time or Delayed against its usual time, as the Departures board words it.
+      const move = dir === "outbound" ? groundMove(a.speed_kt) : null;
+      const isLate = late != null && late >= 15;
+      rows.push({ ...base, dir, other: seen.other, usual, event_at: null,
         rag: dir === "outbound" ? ragOf(late ?? 0) : "unknown",
-        status_note: notes.filter(Boolean).join(" · ") || null });
+        ...(dir === "outbound" ? {
+          status_note: move ?? (isLate ? "Delayed" : "On time"), stage: move ? 4 : 0, flash: null,
+          detail: isLate ? `Late ${Math.round(late!)} min (usually ${usual})` : `Usually departs ${usual}`,
+        } : { status_note: null }) });
     }
     return rows;
   }, [placed, history, live.at, tz, schedIndex]);
@@ -1801,7 +1812,7 @@ export default function AirportConditions() {
 
       <Section
         title="En route"
-        note="Flights within 500 NM that use this airport, in the air or on the ground here waiting to depart (arrivals on the ground are on the Arrivals board): what is happening now, between the past and coming-up flights on the boards below. Where the airport publishes a live schedule (Hong Kong), delay is against the scheduled time and the stand or gate is shown; a departure waiting here shows its stage, coloured as on the Departures board, and Taxiing (or Taking off) once the feed sees it moving; an arrival is Expected, or Approaching inside the 50 NM ring, with the minutes early or late on hover. Elsewhere there is no schedule, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
+        note="Flights within 500 NM that use this airport, in the air or on the ground here waiting to depart (arrivals on the ground are on the Arrivals board): what is happening now, between the past and coming-up flights on the boards below. Every flight shows its stage as the boards do: a departure waiting here its stage on the airport's board (or On time / Delayed against its usual time), Taxiing or Taking off once the feed sees it moving, then Departed; an arrival Expected or Delayed, then Approaching inside the 50 NM ring. Colour is lateness, with the minutes on hover. Where the airport publishes a live schedule (Hong Kong), delay is against the scheduled time and the stand or gate is shown; a flight the airport does not list (greyed time) is measured against its usual time. Elsewhere there is no schedule, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
       >
         {!live.at ? <Skeleton h={160} /> : enRoute.length === 0 ? (
           <Empty>{live.error ? "No live positions." : `No inbound or outbound flights for ${iata} recognised right now.`}</Empty>
