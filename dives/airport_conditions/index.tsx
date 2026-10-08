@@ -23,13 +23,15 @@ const SANS = "'Inter', system-ui, -apple-system, sans-serif";
 
 // ---- Theme: colours are CSS variables on the root element, so inline styles, SVG and
 // Recharts all switch together. "auto" follows the system; a manual choice is remembered.
+// Values follow DESIGN.md (shared with the website and the apps). Light status colours
+// pass 4.5:1 as text on white, and under white text.
 const LIGHT = {
   bg: "#ffffff", surface: "#ffffff", ink: "#1a1a1a", muted: "#6a6a6a", rule: "#e5e5e5",
   "row-active": "#f3f4f6", code: "#f6f7f9", panel: "rgba(255,255,255,0.94)", "panel-faint": "rgba(255,255,255,0.8)",
   "map-bg": "#eef1f4", halo: "#ffffff",
   blue: "#2563eb", "blue-soft": "#93c5fd", orange: "#ea580c",
-  vfr: "#16a34a", mvfr: "#2563eb", ifr: "#dc2626", lifr: "#c026d3",
-  "rag-green": "#16a34a", "rag-amber": "#d97706", "rag-red": "#dc2626", "rag-unknown": "#8d939c",
+  vfr: "#15803d", mvfr: "#1d4ed8", ifr: "#c81e1e", lifr: "#a21caf",
+  "rag-green": "#15803d", "rag-amber": "#b45309", "rag-red": "#c81e1e", "rag-unknown": "#6b7280",
   ground: "#c4c8cf", other: "#b3b8bf",
 };
 const DARK: typeof LIGHT = {
@@ -38,7 +40,7 @@ const DARK: typeof LIGHT = {
   "map-bg": "#1f2226", halo: "#121417",
   blue: "#60a5fa", "blue-soft": "#1e4fa8", orange: "#fb923c",
   vfr: "#22c55e", mvfr: "#60a5fa", ifr: "#f87171", lifr: "#e879f9",
-  "rag-green": "#22c55e", "rag-amber": "#fbbf24", "rag-red": "#f87171", "rag-unknown": "#8d939c",
+  "rag-green": "#22c55e", "rag-amber": "#fbbf24", "rag-red": "#f87171", "rag-unknown": "#9aa0a8",
   ground: "#5b616a", other: "#6b7179",
 };
 const cssVars = (p: typeof LIGHT) => Object.entries(p).map(([k, v]) => `--ac-${k}:${v};`).join("");
@@ -111,6 +113,24 @@ const ORANGE = c("orange");
 const CATEGORY_COLORS: Record<string, string> = {
   VFR: c("vfr"), MVFR: c("mvfr"), IFR: c("ifr"), LIFR: c("lifr"),
 };
+
+// The GroundKit mark (web/public/icon.svg): a wheel against a chock, on a sky-to-navy tile.
+function LogoMark() {
+  return (
+    <svg viewBox="0 0 64 64" width={18} height={18} aria-hidden="true" style={{ flex: "none" }}>
+      <defs>
+        <linearGradient id="ac-logo" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#38bdf8" /><stop offset="0.45" stopColor="#1d6fd0" /><stop offset="1" stopColor="#0b3d91" />
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="14" fill="url(#ac-logo)" />
+      <circle cx="27" cy="31" r="12" fill="none" stroke="#fff" strokeWidth="5" />
+      <circle cx="27" cy="31" r="3.5" fill="#fff" />
+      <path d="M37.5 45.5 L46.5 33 L53 33 L53 45.5 Z" fill="#fff" />
+      <rect x="10" y="45.5" width="44" height="4" rx="2" fill="#fff" />
+    </svg>
+  );
+}
 
 function Skeleton({ h = 200 }: { h?: number }) {
   return <div className="animate-pulse rounded" style={{ height: h, background: RULE }} />;
@@ -1690,7 +1710,9 @@ export default function AirportConditions() {
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: MUTED }}>GroundKit</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: MUTED }}>
+            <LogoMark />GroundKit
+          </div>
           <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
         </div>
         <ThemeSwitch mode={theme.mode} onChange={theme.setMode} />
