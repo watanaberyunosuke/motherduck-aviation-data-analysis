@@ -500,9 +500,47 @@ function tempDewText(wx: Record<string, any>): string {
   const notes = Array.from(new Set([fromNote(wx.temp_source), fromNote(wx.dewpoint_source)].filter(Boolean)));
   return `${N(wx.temp_c)}° / ${dew}°C${notes.join("")}`;
 }
+// METAR/TAF present-weather codes (ICAO Annex 3) in plain English.
+const WX_DESCRIPTOR: Record<string, string> = {
+  MI: "shallow", PR: "partial", BC: "patches of", DR: "low drifting", BL: "blowing", FZ: "freezing",
+};
+const WX_PHENOMENON: Record<string, string> = {
+  DZ: "drizzle", RA: "rain", SN: "snow", SG: "snow grains", IC: "ice crystals", PL: "ice pellets",
+  GR: "hail", GS: "small hail", UP: "unknown precipitation", BR: "mist", FG: "fog", FU: "smoke",
+  VA: "volcanic ash", DU: "dust", SA: "sand", HZ: "haze", PY: "spray", PO: "dust whirls",
+  SQ: "squalls", FC: "funnel cloud", SS: "sandstorm", DS: "duststorm",
+};
+const WX_GROUP = /^(\+|-|VC|RE)?(MI|PR|BC|DR|BL|SH|TS|FZ)?((?:DZ|RA|SN|SG|IC|PL|GR|GS|UP|BR|FG|FU|VA|DU|SA|HZ|PY|PO|SQ|FC|SS|DS)*)$/;
+// One group, e.g. "-SHRA" -> "light rain showers"; a group it cannot read is returned as is.
+function decodeWxGroup(group: string): string {
+  if (group === "NSW") return "no significant weather";
+  const m = WX_GROUP.exec(group);
+  if (!m) return group;
+  const [, prefix, desc, codes] = m;
+  if (prefix === "+" && codes === "FC") return "tornado or waterspout";
+  const what = (codes.match(/../g) ?? []).map((code) => WX_PHENOMENON[code]).join(" and ");
+  let text: string;
+  if (desc === "TS") text = what ? `thunderstorm with ${what}` : "thunderstorm";
+  else if (desc === "SH") text = what ? `${what} showers` : "showers";
+  else if (!what) return group;
+  else text = desc ? `${WX_DESCRIPTOR[desc]} ${what}` : what;
+  if (prefix === "-") return `light ${text}`;
+  if (prefix === "+") return `heavy ${text}`;
+  if (prefix === "VC") return `${text} in the vicinity`;
+  if (prefix === "RE") return `recent ${text}`;
+  return text;
+}
+// "-RA BR" -> "Light rain, mist (-RA BR)", keeping the code for those who read it.
+function wxPlain(wxString: string): string {
+  const code = wxString.trim();
+  if (!code) return code;
+  const text = code.split(/\s+/).map(decodeWxGroup).join(", ");
+  return text === code ? code : `${text.charAt(0).toUpperCase()}${text.slice(1)} (${code})`;
+}
 // "Nil" only while a METAR with no weather group is the latest word on it.
 function weatherText(wx: Record<string, any>): string {
-  return wx.wx_string ?? (wx.wx_text ? `${wx.wx_text}${fromNote(wx.wx_text_source)}` : "Nil");
+  return wx.wx_string != null ? wxPlain(wx.wx_string)
+    : wx.wx_text ? `${wx.wx_text}${fromNote(wx.wx_text_source)}` : "Nil";
 }
 
 // The selected airport's latest METAR, laid over the map.
@@ -2094,7 +2132,7 @@ export default function AirportConditions() {
                     {r.flight_category ?? "–"}
                   </td>
                   <td style={num}>{r.wind_gust_kt == null ? "–" : `${N(r.wind_gust_kt)} kt`}</td>
-                  <td style={{ ...td, color: MUTED }}>{r.wx_string ?? ""}</td>
+                  <td style={{ ...td, color: MUTED }}>{r.wx_string ? wxPlain(r.wx_string) : ""}</td>
                 </tr>
               ))}
             </tbody>
