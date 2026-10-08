@@ -1,6 +1,6 @@
 """MotherDuck Flight: scheduled ingest and dbt build for the aviation warehouse.
 
-One Flight runs weather and NOTAM ingest and dbt, on demand: from ingest.yml with
+One Flight runs weather, NOTAM and Hong Kong gate-time ingest and dbt, on demand: from ingest.yml with
 `runner: flight` and as the deploy's smoke test (the free plan cannot schedule Flights).
 The hourly schedule runs the same PLAN on the GitHub runner instead, with flights and one
 dbt build, because the dbt build outgrew the plan's daily Flight minutes. Running
@@ -42,7 +42,7 @@ GIT_SHA = "__GIT_SHA__"  # commit to run, substituted at deploy
 # Every run without SOURCES, and the weather and NOTAM part of the hourly GitHub run
 # (ingest.yml). METAR and TAF fetches cover weather.lookback_hours, so a missed run
 # leaves no gap.
-PLAN = ["metar", "taf", "wx-extra", "atis-hk", "procedures", "notam-hk", "notam-faa-search"]
+PLAN = ["metar", "taf", "wx-extra", "atis-hk", "schedule-hk", "procedures", "notam-hk", "notam-faa-search"]
 
 
 def pick_sources(override: str) -> list[str]:

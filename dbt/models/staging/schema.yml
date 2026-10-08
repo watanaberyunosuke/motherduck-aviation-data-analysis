@@ -14,6 +14,19 @@ models:
               arguments:
                 values: ['aerodatabox', 'opensky']
 
+  - name: stg_hkia_flights
+    description: Hong Kong's flight boards with each flight's gate time (off-block or on-block).
+    tests:
+      - dbt_utils_free_unique_combination:
+          arguments:
+            columns: [direction, flight, scheduled_at]
+    columns:
+      - name: direction
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['departure', 'arrival']
+
   - name: stg_aerodatabox_flights
     description: One row per AeroDataBox flight, both boards merged, including cancellations.
     columns:

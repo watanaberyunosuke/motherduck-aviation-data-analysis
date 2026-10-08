@@ -57,6 +57,7 @@ TABLES = {
     "marts.fct_daily_airport_movements": "day_utc >= current_date - 31",
     "marts.fct_arrivals": "arrived_at >= now() - interval 31 day",
     "marts.fct_departures": "departed_at >= now() - interval 31 day",
+    "marts.fct_taxi_times": "gate_at >= now() - interval 31 day",
     "marts.fct_arrival_weather_impact": "true",
     "marts.fct_terminal_tracks": "point_at >= now() - interval 3 day",
     "marts.fct_notams": "is_current",

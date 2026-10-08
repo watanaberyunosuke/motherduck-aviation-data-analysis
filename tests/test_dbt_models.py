@@ -204,6 +204,39 @@ def built(tmp_path_factory):
         "source": "computed", "sunrise": now.replace(hour=20, minute=5, second=0, microsecond=0),
         "sunset": now.replace(hour=8, minute=30, second=0, microsecond=0), "fetched_at": now}],
         ["icao", "day"])
+
+    # Hong Kong gate times and OpenSky flights for taxi times, 21 Sep (UTC). CX870 pushes
+    # back at 10:00 and OpenSky first sees CPA0870 (leading zero) at 10:19: taxi-out 19.
+    # CX871 is last seen at 12:00 and on its stand at 12:07: taxi-in 7. CX872's only
+    # OpenSky flight is 2 h after pushback, too late to be its take-off. KA9's board entry
+    # has no gate time (cancelled).
+    hk = datetime(2026, 9, 21, tzinfo=timezone.utc)
+
+    def board(direction, flight, callsign, gate_h, gate_m, status):
+        sched = hk + timedelta(hours=gate_h)
+        gate = None if gate_m is None else hk + timedelta(hours=gate_h, minutes=gate_m)
+        return {"direction": direction, "flight": flight, "scheduled_at": sched, "callsign": callsign,
+                "is_cargo": False, "status": status, "gate_at": gate, "board_date": sched.date(),
+                "loaded_for": sched.date(), "fetched_at": now, "payload": {"synthetic": True}}
+
+    warehouse.upsert(con, "raw.hkia_flights", [
+        board("departure", "CX870", "CPA870", 10, 0, "Dep"),
+        board("arrival", "CX871", "CPA871", 12, 7, "At gate"),
+        board("departure", "CX872", "CPA872", 14, 0, "Dep"),
+        board("departure", "KA9", "HDA9", 15, None, "Cancelled"),
+    ], ["direction", "flight", "scheduled_at"])
+
+    def opensky(icao24, callsign, first_h, first_m, minutes, dep, arr):
+        first = int((hk + timedelta(hours=first_h, minutes=first_m)).timestamp())
+        return {"icao24": icao24, "first_seen": first, "last_seen": first + minutes * 60, "callsign": callsign,
+                "est_departure_airport": dep, "est_arrival_airport": arr, "fetched_at": now,
+                "payload": {"synthetic": True}}
+
+    warehouse.upsert(con, "raw.opensky_flights", [
+        opensky("780870", "CPA0870 ", 10, 19, 240, "VHHH", "RJAA"),
+        opensky("780871", "CPA871", 8, 0, 240, "RJAA", "VHHH"),
+        opensky("780872", "CPA872", 16, 0, 240, "VHHH", "RJAA"),
+    ], ["icao24", "first_seen"])
     con.close()
 
     env = {**os.environ, "WAREHOUSE": str(db)}
@@ -304,9 +337,10 @@ def test_departures_measure_time_to_leave_terminal_area(built):
     con, _ = built
     rows = con.execute("""select icao24, departure_iata, arrival_iata, departure_terminal_minutes,
                                  excess_departure_minutes
-                          from marts.fct_departures order by departed_at""").fetchall()
+                          from marts.fct_departures where departure_icao != 'VHHH'
+                          order by departed_at""").fetchall()
     # The three synthetic SYD -> MEL flights and the QLK10D flight depart an in-scope
-    # airport; the Auckland and YMMB departures do not.
+    # airport; the Auckland and YMMB departures do not. (Hong Kong's are for taxi times.)
     assert [r[0] for r in rows] == ["7c0000", "7c0001", "7c0002", "7c0005"]
     for icao24, dep, arr, minutes, _ in rows[:3]:
         assert (dep, arr) == ("SYD", "MEL")
@@ -317,6 +351,17 @@ def test_departures_measure_time_to_leave_terminal_area(built):
         assert minutes == pytest.approx((exit_t - path[0][0]) / 60, abs=1e-6)
     assert rows[0][4] is None, "first departure has no baseline yet"
     assert rows[3][3] is None, "untracked departures have no terminal metrics"
+
+
+def test_taxi_times_pair_hong_kong_gate_times_with_opensky(built):
+    con, _ = built
+    rows = con.execute("""select direction, flight, airport_icao, taxi_minutes,
+                                 strftime(runway_at at time zone 'UTC', '%H:%M')
+                          from marts.fct_taxi_times order by direction desc, flight""").fetchall()
+    assert rows == [
+        ("departure", "CX870", "VHHH", 19.0, "10:19"),
+        ("arrival", "CX871", "VHHH", 7.0, "12:00"),
+    ]
 
 
 def test_airport_conditions_one_row_per_airport(built):

@@ -2,9 +2,10 @@ name: ingest
 
 # Hourly ingest on the GitHub runner, at 17 minutes past (GitHub delays and drops more
 # runs on the hour). Each run loads, in one job and before a single dbt build:
-# - weather and NOTAMs, the plan of the MotherDuck Flight `aviation_pipeline`: METARs and
-#   TAFs for the last weather.lookback_hours (26, so delayed or dropped runs leave no gap)
-#   and HK and FAA NOTAM Search NOTAMs;
+# - weather, NOTAMs and gate times, the plan of the MotherDuck Flight `aviation_pipeline`:
+#   METARs and TAFs for the last weather.lookback_hours (26, so delayed or dropped runs
+#   leave no gap), HK and FAA NOTAM Search NOTAMs, and Hong Kong's flight boards (today,
+#   yesterday, and older days of the month not loaded since they ended);
 # - flights: `aviation backfill flights` fetches each (airport, direction, UTC day) of the
 #   last 30 days not yet loaded (OpenSky, then AeroDataBox for days OpenSky missed if its
 #   key is set), newest first, plus tracks for the newest day. Loaded days are skipped,
@@ -33,7 +34,7 @@ on:
       source:
         description: "Sources to ingest (scheduled = weather + NOTAMs, the Flight's plan)"
         type: choice
-        options: [scheduled, metar, taf, notam-hk, notam-faa-search, opensky, aerodatabox, all, none,
+        options: [scheduled, metar, taf, schedule-hk, notam-hk, notam-faa-search, opensky, aerodatabox, all, none,
                   backfill-weather, backfill-flights]
         default: scheduled
       runner:
@@ -76,7 +77,7 @@ jobs:
             backfill-*)
               args=(--flight initial_load --config "STEPS=${SOURCE#backfill-}" --timeout-minutes 60) ;;
             scheduled) args=(--sources "") ;;
-            all)    args=(--sources "metar taf wx-extra atis-hk procedures notam-hk notam-faa-search opensky aerodatabox") ;;
+            all)    args=(--sources "metar taf wx-extra atis-hk schedule-hk procedures notam-hk notam-faa-search opensky aerodatabox") ;;
             *)      args=(--sources "$SOURCE") ;;
           esac
           status=0
@@ -120,7 +121,7 @@ jobs:
           SOURCE: ${{ github.event_name == 'schedule' && 'hourly' || inputs.source || 'scheduled' }}
         run: |
           # Same plan as the Flight's PLAN.
-          plan="metar taf wx-extra atis-hk procedures notam-hk notam-faa-search"
+          plan="metar taf wx-extra atis-hk schedule-hk procedures notam-hk notam-faa-search"
           flights=false
           case "$SOURCE" in
             # As the initial_load Flight: OpenSky gets the day's credits (the floor stops it).

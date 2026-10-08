@@ -82,6 +82,25 @@ create table if not exists raw.atis (
     primary key (icao, text_hash)
 );
 
+-- Hong Kong's flight boards (sources/schedule_hk.py), one row per flight and scheduled time,
+-- overwritten each load until its status is final. gate_at is off-block for departures
+-- ("Dep"), on-block for arrivals ("At gate").
+create table if not exists raw.hkia_flights (
+    direction    varchar not null,   -- departure | arrival
+    flight       varchar not null,   -- operating flight number, e.g. CX870
+    scheduled_at timestamptz not null,
+    callsign     varchar,            -- ICAO airline + number, no leading zeros: CPA870
+    is_cargo     boolean not null,   -- from the cargo board
+    status       varchar,
+    gate_at      timestamptz,
+    board_date   date not null,      -- the local day whose board listed it
+    loaded_for   date not null,      -- the day requested: a recent day's answer also lists
+                                     -- the day before's late flights
+    fetched_at   timestamptz not null,
+    payload      json not null,
+    primary key (direction, flight, scheduled_at)
+);
+
 create table if not exists raw.notam (
     source         varchar not null,  -- hk_cad | rapidapi
     notam_key      varchar not null,  -- source-stable id, e.g. VHHK:A2255/26

@@ -1,6 +1,6 @@
 """Command line entry point.
 
-    aviation ingest metar | taf | wx-extra | atis-hk | procedures | notam | notam-hk | notam-faa-search | notam-faa | notam-rapidapi
+    aviation ingest metar | taf | wx-extra | atis-hk | schedule-hk | procedures | notam | notam-hk | notam-faa-search | notam-faa | notam-rapidapi
                     | opensky | aerodatabox | all
     aviation backfill weather [--days N]
     aviation backfill flights [--opensky-calls N] [--aerodatabox-calls N]
@@ -16,7 +16,7 @@ from aviation import warehouse
 from aviation.config import load_settings
 from aviation.sources import (
     aerodatabox, atis_hk, aviationweather, notam_faa, notam_faa_search, notam_hk, notam_rapidapi, opensky,
-    procedures, wx_extra,
+    procedures, schedule_hk, wx_extra,
 )
 
 
@@ -52,6 +52,8 @@ def run(source: str, days: int | None = None, opensky_calls: int | None = None,
         attempt("procedures", lambda: procedures.ingest(con))
     if source in ("atis-hk", "all"):
         attempt("atis hk", lambda: atis_hk.ingest(con))
+    if source in ("schedule-hk", "all"):
+        attempt("schedule hk", lambda: schedule_hk.ingest(con))
     hk = settings.airports_for_notam_source("hk_cad")
     faa_search = settings.airports_for_notam_source("faa_search")
     faa = settings.airports_for_notam_source("faa")
@@ -104,7 +106,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="aviation")
     sub = parser.add_subparsers(dest="command", required=True)
     ingest = sub.add_parser("ingest", help="pull a source into the raw schema")
-    ingest.add_argument("source", choices=["metar", "taf", "wx-extra", "atis-hk", "procedures", "notam", "notam-hk", "notam-faa-search",
+    ingest.add_argument("source", choices=["metar", "taf", "wx-extra", "atis-hk", "schedule-hk", "procedures", "notam", "notam-hk", "notam-faa-search",
                                            "notam-faa", "notam-rapidapi", "opensky",
                                            "aerodatabox", "all"])
     backfill = sub.add_parser("backfill", help="load history (flights backfill within ingest)")
