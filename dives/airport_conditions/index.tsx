@@ -917,9 +917,8 @@ function arrivalStatus(s: Sched, now: Date, fmt: (d: Date) => string, feed?: Fee
 
 const ARRIVAL_KEY = `worded as the airport's own board, each flight moves ${ARR_STAGES.join(" → ")} (the pips; Approaching and Taxiing in are from the live feed), coloured by lateness against the scheduled time: green on time or early, amber 15-44 min late, red 45 min or more late or cancelled, grey at the gate or no update past the scheduled time; hover a status for the minutes`;
 
-// The status cell of every board: a dot, or for flights on the airport's board one pip per
-// stage (DEP_STAGES or ARR_STAGES), filled up to the stage reached; then the status in the
-// same colour.
+// The status cell of every board: one pip per stage (DEP_STAGES or ARR_STAGES), filled up
+// to the stage reached (a dot where a row has no stage); then the status in the same colour.
 function StatusCell({ status, rag, stage, flash, detail, stages = DEP_STAGES }: {
   status: string; rag: Rag; stage?: Stage; flash?: Flash; detail?: string | null; stages?: readonly string[];
 }) {
@@ -957,9 +956,11 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
   if (arriving) for (const r of rows) {
     if (isEnRoute(r)) continue;
     const landed = memory.get(r.callsign)?.landed_at ?? null;
+    const taxiing = groundMove(r.aircraft.speed_kt) != null;
     add({
       phase: "past", flight_iata: r.flight_iata, callsign: r.callsign, other: r.other, sort: (landed ?? now).getTime(),
-      status: groundMove(r.aircraft.speed_kt) ? "Taxiing in" : "Landed, on the ground", rag: "unknown", where: null, planned: r.usual, local: landed ? `Landed ~${at(landed)}` : "–",
+      status: taxiing ? "Taxiing in" : "Landed", stage: taxiing ? 3 : 2, flash: null, detail: "On the ground here, on the live feed",
+      rag: "unknown", where: null, planned: r.usual, local: landed ? `Landed ~${at(landed)}` : "–",
       freighter: liveFreighter(r),
     });
   }
@@ -975,7 +976,8 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     if (when.getTime() < cutoff) continue;
     add({
       phase: "past", flight_iata: m.flight_iata, callsign: m.callsign, other: m.other, sort: when.getTime(),
-      status: arriving ? "Landed" : `Departed, ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
+      status: arriving ? "Landed" : "Departed", stage: arriving ? 2 : 5, flash: null,
+      detail: arriving ? ragText(m.aircraft) : `${ragText(m.aircraft)}; ${m.dist_nm > 400 ? "out of 500 NM" : "off the feed"}`,
       rag: m.rag, where: null, planned: m.usual, local: `${arriving ? "Landed" : "Took off"} ~${at(when)}`,
       freighter: liveFreighter(m),
     });
@@ -991,8 +993,10 @@ function buildBoard(dir: Dir, rows: BoardLive[], memory: Map<string, Remembered>
     const when = new Date(now.getTime() + delta * 60_000);
     add({
       phase: delta < 0 ? "past" : "next", flight_iata: flightIata(callsign), callsign, other: seen.other, sort: when.getTime(),
-      status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}, not seen live`
-        : arriving ? "Expected, not yet within 500 NM" : "Expected",
+      status: delta < 0 ? `Presumed ${arriving ? "landed" : "departed"}` : "Expected",
+      stage: delta < 0 ? (arriving ? 2 : 5) : 0, flash: null,
+      detail: delta < 0 ? `Not seen live; usually ${arriving ? "lands" : "departs"} ${hhmm(seen.usual)}`
+        : arriving ? "Not yet within 500 NM" : "Not yet seen on the live feed",
       rag: "unknown", where: null, planned: hhmm(seen.usual), local: "–", freighter: seen.freighter,
     });
   }
@@ -1885,11 +1889,11 @@ export default function AirportConditions() {
         </p>
       </Section>
 
-      <Section title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Status is lateness against the usual time where the feed saw the flight; ${iata} local is when it saw it land (~ marks an estimate).`}>
+      <Section title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Each flight moves ${ARR_STAGES.join(" → ")} as on the Hong Kong board (the pips; At gate needs the airport's board), from the live feed: Landed or Taxiing in once it is on the ground here, Presumed landed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes. ${iata} local is when it saw it land (~ marks an estimate).`}>
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.inbound} dir="inbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
-      <Section title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Status is lateness against the usual time where the feed saw the flight; ${iata} local is its estimated take-off (~).`}>
+      <Section title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Each flight moves ${DEP_STAGES.join(" → ")} as on the Hong Kong board (the pips), from the live feed, which cannot see boarding: Expected until it is seen, then Taxiing (in En route) and Departed, or Presumed departed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes and whether it left 500 NM or the feed. ${iata} local is its estimated take-off (~).`}>
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.outbound} dir="outbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
