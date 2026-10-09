@@ -8,7 +8,7 @@ One palette for every GroundKit product: the Airport conditions dashboard (`dive
 2. **Status never by colour alone.** Every status carries an icon and a word (Normal ops, Caution, Warning; On time, Late, Very late).
 3. **The brand never looks like a status.** The brand is blue. Amber, orange and red mean caution or warning and are not used for branding or primary controls.
 4. **Aviation conventions win over the brand.** Flight categories keep their standard colours (VFR green, MVFR blue, IFR red, LIFR magenta), even though MVFR is close to the brand blue. Category badges always show their label.
-5. **Native first on mobile.** Shared colours, platform controls. iOS keeps system colours for status (they adapt to Increase Contrast); Android keeps fixed schemes rather than wallpaper colour, for contrast outdoors.
+5. **Native first on mobile.** Shared colours, platform controls. iOS uses the soft status tones in §4 as asset colours, each with an Increase Contrast variant; Android keeps fixed schemes rather than wallpaper colour, for contrast outdoors.
 
 ## 2. Brand colours: light blue to navy
 
@@ -42,9 +42,9 @@ iOS uses the system backgrounds and label colours instead (`.background`, `.seco
 
 | Meaning | Light | Dark | iOS |
 |---|---|---|---|
-| OK, on time, VFR | `#15803D` | `#22C55E` | `.green` |
-| Caution, late | `#B45309` | `#FBBF24` | `.orange` |
-| Warning, very late, IFR | `#C81E1E` | `#F87171` | `.red` |
+| OK, on time, VFR | `#15803D` | `#22C55E` | `StatusOK` |
+| Caution, late | `#B45309` | `#FBBF24` | `StatusCaution` |
+| Warning, very late, IFR | `#C81E1E` | `#F87171` | `StatusWarning` |
 | Unknown | `#6B7280` | `#9AA0A8` | `.secondary` |
 | MVFR | `#1D4ED8` | `#60A5FA` | `.blue` |
 | LIFR | `#A21CAF` | `#E879F9` | `.purple` |
@@ -52,6 +52,15 @@ iOS uses the system backgrounds and label colours instead (`.background`, `.seco
 | Departure path | `#EA580C` | `#FB923C` | |
 
 The light values are darker than the Tailwind defaults so that they pass 4.5:1 as text on white, and white text on them passes too.
+
+**Soft status tones (iOS).** Status is shown as a muted tone on a pale container, not as a saturated fill: icon and label in the tone, body text in the normal text colour. Each tone passes 4.5:1 on its container. Normal ops uses a plain check (`checkmark.circle.fill`), not a seal, which reads as an endorsement.
+
+| Meaning | Tone light / dark | Container light / dark | Increase Contrast tone light / dark |
+|---|---|---|---|
+| OK | `#2B744A` / `#86C9A0` | `#E3F0E7` / `#1E3427` | `#1D5535` / `#A9DDBD` |
+| Caution | `#94591A` / `#E2B672` | `#F7ECDB` / `#3A2F1C` | `#6E400F` / `#F0CD94` |
+| Warning | `#AD3B3B` / `#EE9B95` | `#F7E3E1` / `#3E2525` | `#8A2525` / `#F7BDB8` |
+| Info | `#2F6299` / `#94B8E3` | `#E2EBF6` / `#1D2B3F` | `#1F4775` / `#B8D0F0` |
 
 ## 5. Type
 
@@ -74,7 +83,7 @@ The light values are darker than the Tailwind defaults so that they pass 4.5:1 a
 |---|---|
 | Dashboard | `dives/airport_conditions/index.tsx` (`LIGHT`, `DARK`) |
 | Website | `src/app/globals.css` (`--brand`, `--status-*`) |
-| iOS | `Assets.xcassets` (`AccentColor`, `OnAccent`, `AppIcon`) |
+| iOS | `Assets.xcassets` (`AccentColor`, `OnAccent`, `AppIcon`, `Status*`, `Status*Container`) |
 | Android | `ui/theme/Color.kt`, `ui/theme/Theme.kt`, `res/drawable/ic_launcher_*.xml` |
 
 Change a value here first, then in each file above.
