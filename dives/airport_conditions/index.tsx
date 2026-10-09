@@ -6,7 +6,7 @@
 // Published by scripts/deploy_motherduck.py; preview locally with `motherduck dive watch`.
 // The same file is the Vercel site: web/ bundles it and runs its SQL on DuckDB-WASM.
 // Live aircraft come from the Vercel API (/api/live), which proxies OpenSky.
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Children, isValidElement, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSQLQuery, useDiveState } from "@motherduck/react-sql-query";
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -56,6 +56,8 @@ const c = (k: keyof typeof LIGHT) => `var(--ac-${k})`;
 
 type ThemeMode = "auto" | "light" | "dark";
 const THEME_KEY = "airport-conditions-theme";
+export const THEME_SET_EVENT = "groundkit:set-theme";
+export const THEME_CHANGED_EVENT = "groundkit:theme-changed";
 const darkQuery = () =>
   typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 
@@ -76,12 +78,26 @@ function useTheme() {
     q.addEventListener("change", onChange);
     return () => q.removeEventListener("change", onChange);
   }, []);
-  const setMode = (next: ThemeMode) => {
+  const apply = (next: ThemeMode) => {
     try {
       if (next === "auto") localStorage.removeItem(THEME_KEY);
       else localStorage.setItem(THEME_KEY, next);
     } catch { /* keep it for this visit only */ }
     setModeState(next);
+  };
+  // On the Vercel site a signed-in user's theme is synced (web/src/account): the page
+  // hears about changes here and can set the theme. Inside MotherDuck nothing listens.
+  useEffect(() => {
+    const onSet = (e: Event) => {
+      const next = (e as CustomEvent).detail;
+      if (next === "auto" || next === "light" || next === "dark") apply(next);
+    };
+    window.addEventListener(THEME_SET_EVENT, onSet);
+    return () => window.removeEventListener(THEME_SET_EVENT, onSet);
+  }, []);
+  const setMode = (next: ThemeMode) => {
+    apply(next);
+    window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: next }));
   };
   return { mode, setMode, dark: mode === "dark" || (mode === "auto" && systemDark) };
 }
@@ -140,9 +156,9 @@ function Empty({ children }: { children: ReactNode }) {
   return <div style={{ color: MUTED, fontSize: 13, padding: "24px 0" }}>{children}</div>;
 }
 
-function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
+function Section({ id, title, note, children }: { id?: string; title: string; note?: string; children: ReactNode }) {
   return (
-    <section style={{ marginTop: 32 }}>
+    <section id={id} style={{ marginTop: 32 }}>
       <h2 style={{ fontSize: 15, fontWeight: 600, color: INK, margin: 0 }}>{title}</h2>
       {note && <p style={{ fontSize: 12, color: MUTED, margin: "4px 0 12px" }}>{note}</p>}
       {children}
@@ -160,7 +176,76 @@ function KPI({ label, value }: { label: string; value: string }) {
 }
 
 const DEFAULT_AIRPORT = "HKG";
-const HOME_TZ = "Australia/Melbourne";
+export const HOME_TZ = "Australia/Melbourne";
+
+// The per-airport sections, in their default order. The `layout` Dive state lists their
+// ids in the order to show them, a leading "-" hiding one ("airspace,-notams,..."); ids it
+// leaves out keep their default place after the listed ones. Empty is the default layout.
+// On the Vercel site a signed-in user's saved layout fills it (web/src/account).
+export const SECTIONS = [
+  { id: "conditions", title: "Current conditions" },
+  { id: "notams", title: "NOTAMs in force" },
+  { id: "airspace", title: "Airspace" },
+  { id: "en_route", title: "En route" },
+  { id: "arrivals", title: "Arrivals" },
+  { id: "departures", title: "Departures" },
+  { id: "arrivals_30d", title: "Arrivals, last 30 days" },
+  { id: "wind_72h", title: "Wind and flight category, last 72 hours" },
+  { id: "movements", title: "Observed movements, last 30 days" },
+  { id: "weather_penalty", title: "Weather penalty" },
+  { id: "slowest_arrivals", title: "Slowest arrivals, last 30 days" },
+  { id: "departures_30d", title: "Departures, last 30 days" },
+] as const;
+
+export type LayoutItem = { id: string; title: string; hidden: boolean };
+
+export function parseLayout(layout: string): LayoutItem[] {
+  const known = new Map<string, { id: string; title: string }>(SECTIONS.map((s) => [s.id, s]));
+  const out: LayoutItem[] = [];
+  for (const raw of layout.split(",")) {
+    const token = raw.trim();
+    const hidden = token.startsWith("-");
+    const section = known.get(hidden ? token.slice(1) : token);
+    if (!section) continue;
+    known.delete(section.id);
+    out.push({ ...section, hidden });
+  }
+  for (const section of known.values()) out.push({ ...section, hidden: false });
+  return out;
+}
+
+export function formatLayout(items: LayoutItem[]): string {
+  const value = items.map((s) => (s.hidden ? `-${s.id}` : s.id)).join(",");
+  return value === SECTIONS.map((s) => s.id).join(",") ? "" : value;
+}
+
+// Shows its children (each with an `id` from SECTIONS) in the layout's order, leaving out
+// hidden ones. The elements are reordered, not restyled, so tab order follows.
+function Ordered({ layout, children }: { layout: string; children: ReactNode }) {
+  const byId = new Map<string, ReactNode>();
+  Children.forEach(children, (child) => {
+    if (isValidElement<{ id?: string }>(child) && child.props.id) byId.set(child.props.id, child);
+  });
+  return <>{parseLayout(layout).filter((s) => !s.hidden).map((s) => byId.get(s.id))}</>;
+}
+
+// A section plus the details that belong to it, moved as one.
+function Block({ children }: { id: string; children: ReactNode }) {
+  return <>{children}</>;
+}
+
+// A time zone the browser knows (Dive state comes from the URL, so it may be anything).
+function validZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// "Australia/Melbourne" -> "Melbourne".
+const zoneLabel = (tz: string) => (tz === "UTC" ? "UTC" : tz.split("/").pop()!.replace(/_/g, " "));
 // On the Vercel site the API is same-origin; inside MotherDuck it is the production site.
 const API_BASE = /(^|\.)vercel\.app$|^localhost$|^127\.0\.0\.1$/.test(window.location.hostname)
   ? "" : "https://motherduck-aviation-data-analysis.vercel.app";
@@ -1184,6 +1269,9 @@ export default function AirportConditions() {
   const airports = rowsOf(airportsQ.data);
   // The URL holds the IATA code (?airport=SYD); older links with ICAO still resolve.
   const [picked, setPicked] = useDiveState<string>("airport", "");
+  const [layout] = useDiveState<string>("layout", "");
+  const [homeTzState] = useDiveState<string>("home_tz", HOME_TZ);
+  const homeTz = validZone(homeTzState) ? homeTzState : HOME_TZ;
   const airport = airports.find((a) => a.iata === picked || a.icao === picked)
     ?? airports.find((a) => a.iata === DEFAULT_AIRPORT) ?? airports[0];
   // icao and tz always come from the airports seed, so they are safe to inline.
@@ -1727,7 +1815,7 @@ export default function AirportConditions() {
       <Clocks zones={[
         { label: "UTC", tz: "UTC" },
         ...(airport ? [{ label: `${iata} local`, tz }] : []),
-        { label: "Melbourne", tz: HOME_TZ },
+        { label: zoneLabel(homeTz), tz: homeTz },
       ]} />
 
       <Section title="Last 7 days, all airports" note="Share of observed hours. Click an airport to drill in.">
@@ -1804,7 +1892,9 @@ export default function AirportConditions() {
         <span style={{ fontSize: 12, color: MUTED }}>{icao}</span>
       </div>
 
+      <Ordered layout={layout}>
       <Section
+        id="conditions"
         title="Current conditions"
         note={wx?.metar_at ? `Latest METAR ${wx.metar_at}, ${N(wx.metar_age_min)} min ago. Refreshed hourly by the pipeline.` : undefined}
       >
@@ -1845,6 +1935,7 @@ export default function AirportConditions() {
       </Section>
 
       <Section
+        id="notams"
         title="NOTAMs in force"
         note={`Full text of every NOTAM for ${icao} that is in force now, newest first${notamSource ? `, from the ${notamSource}` : ""}. Times are UTC; refreshed every 3 hours. A NOTAM with a schedule (D) item) is active only in the listed windows. For analysis, not flight planning.`}
       >
@@ -1864,6 +1955,7 @@ export default function AirportConditions() {
       </Section>
 
       <Section
+        id="airspace"
         title="Airspace"
         note="Live aircraft within 500 NM. Flights inbound to or outbound from this airport are coloured by delay status: green on time (under 15 min late), amber 15-44 min late, red 45 min or more, grey no usual time; other traffic is light grey. Lines are observed arrival (blue) and departure (orange) paths of tracked flights over the last 3 days, which trace the procedures in use. Dashed ring: 50 NM terminal area. The panel shows the latest METAR, including the surface wind. Click an aircraft for its details. Zoom out to see en route traffic."
       >
@@ -1893,6 +1985,7 @@ export default function AirportConditions() {
       </Section>
 
       <Section
+        id="en_route"
         title="En route"
         note="Flights within 500 NM that use this airport, in the air or on the ground here waiting to depart (arrivals on the ground are on the Arrivals board): what is happening now, between the past and coming-up flights on the boards below. Every flight shows its stage as the boards do: a departure waiting here its stage on the airport's board (or On time / Delayed against its usual time), Taxiing or Taking off once the feed sees it moving, then Departed; an arrival Expected or Delayed, then Approaching inside the 50 NM ring. Colour is lateness, with the minutes on hover. Where the airport publishes a live schedule (Hong Kong), delay is against the scheduled time and the stand or gate is shown; a flight the airport does not list (greyed time) is measured against its usual time. Elsewhere there is no schedule, so delay is against the flight's usual time here over the last 30 days: ETA for inbound flights (current ground speed to the 50 NM ring, then the airport's median time inside it), estimated take-off for outbound ones (the same, backwards), and for a departure still on the ground, how long past its usual time it is. Inbound / outbound comes from the same 30 days of callsigns."
       >
@@ -1967,15 +2060,15 @@ export default function AirportConditions() {
         </p>
       </Section>
 
-      <Section title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Each flight moves ${ARR_STAGES.join(" → ")} as on the Hong Kong board (the pips; At gate needs the airport's board), from the live feed: Landed or Taxiing in once it is on the ground here, Presumed landed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes. ${iata} local is when it saw it land (~ marks an estimate).`}>
+      <Section id="arrivals" title="Arrivals" note={schedule.source ? scheduleNote("arrivals") : `Before and after En route; there is no live schedule. Past (greyed) is arrivals on the ground here now or that the feed showed landing this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet within 500 NM, by their usual time. Each flight moves ${ARR_STAGES.join(" → ")} as on the Hong Kong board (the pips; At gate needs the airport's board), from the live feed: Landed or Taxiing in once it is on the ground here, Presumed landed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes. ${iata} local is when it saw it land (~ marks an estimate).`}>
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.inbound} dir="inbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
-      <Section title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Each flight moves ${DEP_STAGES.join(" → ")} as on the Hong Kong board (the pips), from the live feed, which cannot see boarding: Expected until it is seen, then Taxiing (in En route) and Departed, or Presumed departed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes and whether it left 500 NM or the feed. ${iata} local is its estimated take-off (~).`}>
+      <Section id="departures" title="Departures" note={schedule.source ? scheduleNote("departures") : `Before and after En route; there is no live schedule. Past (greyed) is departures the feed showed leaving this visit, then regular flights (seen on ${REGULAR_DAYS} of the last 14 days) by their usual time; coming up is regular flights not yet seen, by their usual time. Each flight moves ${DEP_STAGES.join(" → ")} as on the Hong Kong board (the pips), from the live feed, which cannot see boarding: Expected until it is seen, then Taxiing (in En route) and Departed, or Presumed departed where the feed did not see it. Colour is lateness against the usual time where the feed saw the flight, grey otherwise; hover a status for the minutes and whether it left 500 NM or the feed. ${iata} local is its estimated take-off (~).`}>
         {!live.at && !live.error ? <Skeleton h={240} /> : <Board rows={boards.outbound} dir="outbound" iata={iata} planned={schedule.source ? "Scheduled" : "Usual"} showWhere={schedule.source != null} />}
       </Section>
 
-      <Section title="Arrivals, last 30 days" note="Taxi-in, where the airport publishes gate times (Hong Kong): OpenSky's last position, at or just before landing, to on-block on the airport's board.">
+      <Section id="arrivals_30d" title="Arrivals, last 30 days" note="Taxi-in, where the airport publishes gate times (Hong Kong): OpenSky's last position, at or just before landing, to on-block on the airport's board.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 24 }}>
           {kpiQ.isLoading || !kpi ? <Skeleton h={56} /> : (
             <>
@@ -1990,7 +2083,7 @@ export default function AirportConditions() {
         </div>
       </Section>
 
-      <Section title="Wind and flight category, last 72 hours" note="Each cell in the strip is one hour's latest METAR.">
+      <Section id="wind_72h" title="Wind and flight category, last 72 hours" note="Each cell in the strip is one hour's latest METAR.">
         {hourlyQ.isLoading ? <Skeleton h={240} /> : hourly.length === 0 ? (
           <Empty>No METARs for {iata} in the last 72 hours.</Empty>
         ) : (
@@ -2024,7 +2117,7 @@ export default function AirportConditions() {
         )}
       </Section>
 
-      <Section title="Observed movements, last 30 days" note="What OpenSky saw. Undercounts where ADS-B receiver coverage is thin.">
+      <Section id="movements" title="Observed movements, last 30 days" note="What OpenSky saw. Undercounts where ADS-B receiver coverage is thin.">
         {movementsQ.isLoading ? <Skeleton h={220} /> : movements.length === 0 ? (
           <Empty>No OpenSky movements for {iata} in the last 30 days.</Empty>
         ) : (
@@ -2042,7 +2135,9 @@ export default function AirportConditions() {
         )}
       </Section>
 
+      <Block id="weather_penalty">
       <Section
+        id="weather_penalty"
         title="Weather penalty"
         note="Median excess terminal time with and without each condition, all time. Read alongside n: small samples are noisy."
       >
@@ -2124,8 +2219,9 @@ export default function AirportConditions() {
           {arrivals.length} arrivals. Muted flights have no IATA flight number and show their ATC callsign. Hover a flight for its callsign, an origin for its ICAO code.
         </p>
       </details>
+      </Block>
 
-      <Section title="Slowest arrivals, last 30 days" note="Most excess terminal-area time, with the weather when they landed.">
+      <Section id="slowest_arrivals" title="Slowest arrivals, last 30 days" note="Most excess terminal-area time, with the weather when they landed.">
         {worstQ.isLoading ? <Skeleton h={200} /> : rowsOf(worstQ.data).length === 0 ? (
           <Empty>No benchmarked arrivals at {iata} yet. Each needs at least one earlier arrival in the 30-day baseline.</Empty>
         ) : (
@@ -2162,7 +2258,8 @@ export default function AirportConditions() {
         )}
       </Section>
 
-      <Section title="Departures, last 30 days" note="Time to leave the terminal area: first airborne position to crossing 50 NM, against the airport's rolling 30-day median. Taxi-out, where the airport publishes gate times (Hong Kong): off-block on the airport's board (its departure time) to OpenSky's first position, at or just after take-off.">
+      <Block id="departures_30d">
+      <Section id="departures_30d" title="Departures, last 30 days" note="Time to leave the terminal area: first airborne position to crossing 50 NM, against the airport's rolling 30-day median. Taxi-out, where the airport publishes gate times (Hong Kong): off-block on the airport's board (its departure time) to OpenSky's first position, at or just after take-off.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 24 }}>
           {depKpiQ.isLoading || !depKpi ? <Skeleton h={56} /> : (
             <>
@@ -2225,6 +2322,8 @@ export default function AirportConditions() {
           {departures.length} departures. Muted flights have no IATA flight number and show their ATC callsign. Hover a flight for its callsign, a destination for its ICAO code.
         </p>
       </details>
+      </Block>
+      </Ordered>
     </>,
   );
 }

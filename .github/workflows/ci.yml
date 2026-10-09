@@ -1,7 +1,8 @@
 name: ci-cd
 
 # test:   every push and pull request. Unit tests plus a full dbt build on a temporary
-#         DuckDB file (tests/test_dbt_models.py).
+#         DuckDB file (tests/test_dbt_models.py). supabase: the accounts migrations on a
+#         throwaway Postgres (scripts/test_supabase.sh).
 # deploy: pushes to main (or a manual run on main), after tests pass. Builds the dbt
 #         project into MotherDuck so model and seed changes go live before the next
 #         scheduled ingest, then publishes the aviation_pipeline Flight (pinned to this
@@ -36,6 +37,13 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen --extra dev
       - run: uv run pytest -q
+
+  # The accounts migrations (supabase/) against the runner's preinstalled Postgres.
+  supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/test_supabase.sh
 
   deploy:
     needs: test

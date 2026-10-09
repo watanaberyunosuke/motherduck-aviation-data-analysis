@@ -178,6 +178,10 @@ WAREHOUSE=data/aviation.duckdb uvicorn api.index:app --port 8000   # pip install
 cd web && yarn install --frozen-lockfile && yarn dev               # proxies /api to :8000
 ```
 
+### Accounts (optional)
+
+GroundKit accounts sync settings between the iOS app, the Android app and the dashboard. Sign-in uses email and password, Apple, Google or Microsoft through Supabase Auth, and the schema is in `supabase/migrations`. The dashboard shows **Customise** (home airport, third clock, section order and visibility) and **Sign in** above the Dive. Signed out, customisation stays in the browser. The Dive reads the layout and clock as Dive state (`layout`, `home_tz`), so inside MotherDuck it shows the defaults. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in Vercel to switch sign-in on. Setup, the settings contract and known gaps are in [docs/accounts.md](docs/accounts.md).
+
 ### Deploying
 
 `scripts/deploy_motherduck.py` (or `make deploy-motherduck`) publishes both. It matches the Flight by name and the Dive by title, creates them if missing and updates them otherwise; every update is a new version in MotherDuck. The two are published independently, so a Flight failure does not stop the Dive. Run locally, it refuses a commit that is not yet on GitHub, because the Flight would fail to download it. Pass `--only flight` or `--only dive` to publish one. In CI, a push to main deploys only what it changed: dbt seed + build when `dbt/` (or the pinned dbt version in `pyproject.toml` / `uv.lock`) changed, the Flight when `flights/`, `src/`, `dbt/` or `config/` changed (the Flight runs those from its pinned commit), the Dive when `dives/` changed; a manual run does all three.
@@ -185,6 +189,7 @@ cd web && yarn install --frozen-lockfile && yarn dev               # proxies /ap
 `ci.yml` is the CI/CD pipeline:
 
 - **test**: on every push and pull request, runs `pytest` (including a full dbt build on a temporary DuckDB file) on Python 3.11 and 3.14.
+- **supabase**: on every push and pull request, runs the accounts migrations and their tests on a throwaway Postgres (`scripts/test_supabase.sh`).
 - **deploy**: on pushes to `main`, after tests pass, rebuilds seeds and runs `dbt build` against MotherDuck (`md:aviation`), creating the database if it does not exist. It then points the Flight at the new commit and publishes the Dive. It uses the `production` environment, so you can add required reviewers under Settings > Environments. It needs the `MOTHERDUCK_TOKEN`, `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` secrets, and optionally `FAA_CLIENT_ID` and `FAA_CLIENT_SECRET`.
 
 Deploy and the ingest workflow share a concurrency group, so they never write to the warehouse at the same time. Because the ingest job waits for the Flight run, the group covers the Flight too, unless you start a run directly with `md_run_flight`. Both install dependencies from `uv.lock`; after changing dependencies in `pyproject.toml`, run `uv lock` and commit the lockfile.

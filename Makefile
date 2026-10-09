@@ -1,4 +1,4 @@
-.PHONY: setup ingest-weather ingest-notams ingest-flights ingest-all transform test all deploy-motherduck
+.PHONY: setup ingest-weather ingest-notams ingest-flights ingest-all transform test test-supabase all deploy-motherduck
 
 # Pick up WAREHOUSE / MOTHERDUCK_TOKEN from .env and hand dbt an absolute path,
 # because dbt runs from the dbt/ directory.
@@ -34,6 +34,10 @@ transform:
 
 test:
 	pytest -q
+
+# Accounts migrations (supabase/) on a throwaway local Postgres.
+test-supabase:
+	scripts/test_supabase.sh
 
 all: ingest-all transform
 
