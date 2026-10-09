@@ -5,12 +5,14 @@
 // browser: each table a query names ("aviation"."marts"."x") is fetched once as Parquet
 // from /api/tables/<schema>.<table> (api/index.py, cached at Vercel's edge) and loaded
 // into an in-memory database attached as `aviation`, so the Dive's SQL resolves as-is.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import * as duckdb from "@duckdb/duckdb-wasm";
 // Only the WebAssembly-exceptions build (every current browser supports it), served
 // from this deployment. The fallback "mvp" build would add another 39 MB.
 import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import ehWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
+import { getAccount, subscribeSettings } from "./account/store";
+import type { SettingKey } from "./account/settings";
 
 let dbPromise: Promise<duckdb.AsyncDuckDB> | null = null;
 
@@ -112,10 +114,24 @@ export function useSQLQuery(sql: string, options: { enabled?: boolean } = {}): Q
   return state;
 }
 
-// Dive state lives in the URL query string, so a link opens the same view.
+// Dive state that a saved setting supplies when the URL does not (src/account): the home
+// airport, the section layout and the home clock's time zone.
+const SETTING_FOR: Record<string, SettingKey> = {
+  airport: "airport",
+  layout: "dashboardLayout",
+  home_tz: "dashboardHomeTimeZone",
+};
+
+// Dive state lives in the URL query string, so a link opens the same view. Without it in
+// the URL, the viewer's saved setting applies, then the Dive's default.
 export function useDiveState<T extends string>(key: string, initial: T): [T, (value: T) => void] {
-  const [value, setValue] = useState<T>(
-    () => (new URLSearchParams(window.location.search).get(key) as T | null) ?? initial,
+  const [value, setValue] = useState<T | null>(
+    () => new URLSearchParams(window.location.search).get(key) as T | null,
+  );
+  const settingKey = SETTING_FOR[key] as SettingKey | undefined;
+  const saved = useSyncExternalStore(
+    subscribeSettings,
+    () => (settingKey ? getAccount().local.values[settingKey] : undefined),
   );
   const set = useCallback((next: T) => {
     const url = new URL(window.location.href);
@@ -123,5 +139,5 @@ export function useDiveState<T extends string>(key: string, initial: T): [T, (va
     window.history.replaceState(null, "", url);
     setValue(next);
   }, [key]);
-  return [value, set];
+  return [value ?? (typeof saved === "string" && saved !== "" ? (saved as T) : initial), set];
 }

@@ -1,0 +1,114 @@
+/* The account bar and its dialogs. Colours are DESIGN.md's; the theme follows the Dive's
+   data-theme (or the system before the Dive mounts), as index.html does for the page. */
+:root {
+  --gk-bg: #ffffff; --gk-surface: #ffffff; --gk-ink: #1a1a1a; --gk-muted: #6a6a6a; --gk-rule: #e5e5e5;
+  --gk-row: #f3f4f6; --gk-primary: #0b3d91; --gk-on-primary: #ffffff; --gk-accent: #2563eb;
+  --gk-warning: #c81e1e; --gk-warning-container: #f7e3e1; --gk-backdrop: rgba(17, 24, 39, 0.45);
+}
+@media (prefers-color-scheme: dark) {
+  html:not(:has([data-theme="light"])) {
+    --gk-bg: #121417; --gk-surface: #1b1e23; --gk-ink: #e6e7e9; --gk-muted: #9aa0a8; --gk-rule: #2e333a;
+    --gk-row: #23272e; --gk-primary: #60a5fa; --gk-on-primary: #0b1b36; --gk-accent: #60a5fa;
+    --gk-warning: #f87171; --gk-warning-container: #3e2525; --gk-backdrop: rgba(0, 0, 0, 0.6);
+  }
+}
+html:has([data-theme="dark"]) {
+  --gk-bg: #121417; --gk-surface: #1b1e23; --gk-ink: #e6e7e9; --gk-muted: #9aa0a8; --gk-rule: #2e333a;
+  --gk-row: #23272e; --gk-primary: #60a5fa; --gk-on-primary: #0b1b36; --gk-accent: #60a5fa;
+  --gk-warning: #f87171; --gk-warning-container: #3e2525; --gk-backdrop: rgba(0, 0, 0, 0.6);
+}
+
+.gk-bar {
+  display: flex; justify-content: flex-end; align-items: center; gap: 12px;
+  padding: 12px 24px 0; font-family: 'Inter', system-ui, -apple-system, sans-serif; font-size: 13px;
+  background: var(--gk-bg); color: var(--gk-ink);
+}
+.gk-bar :is(button, input, select) { font: inherit; box-sizing: border-box; }
+.gk-bar *, .gk-bar *::before, .gk-bar *::after { box-sizing: border-box; }
+
+.gk-button {
+  border: 1px solid var(--gk-rule); border-radius: 6px; background: var(--gk-surface); color: var(--gk-ink);
+  padding: 7px 14px; font-weight: 500; cursor: pointer; min-height: 36px;
+}
+.gk-button:hover:not(:disabled) { background: var(--gk-row); }
+.gk-button:disabled { opacity: 0.55; cursor: default; }
+.gk-button-primary { background: var(--gk-primary); border-color: var(--gk-primary); color: var(--gk-on-primary); }
+.gk-button-primary:hover:not(:disabled) { background: var(--gk-primary); filter: brightness(1.1); }
+.gk-button-danger { color: var(--gk-warning); border-color: var(--gk-warning); }
+.gk-button-wide { width: 100%; }
+.gk-link {
+  border: none; background: none; padding: 4px 0; color: var(--gk-accent); cursor: pointer; text-decoration: none;
+}
+.gk-link:hover:not(:disabled) { text-decoration: underline; }
+.gk-link:disabled { color: var(--gk-muted); cursor: default; }
+.gk-icon-button {
+  border: 1px solid transparent; background: none; color: var(--gk-muted); cursor: pointer;
+  min-width: 32px; min-height: 32px; border-radius: 6px; font-size: 16px; line-height: 1;
+}
+.gk-icon-button:hover:not(:disabled) { background: var(--gk-row); color: var(--gk-ink); }
+.gk-icon-button:disabled { opacity: 0.35; cursor: default; }
+.gk-bar :is(button, a, input, select, summary):focus-visible { outline: 2px solid var(--gk-accent); outline-offset: 2px; }
+
+.gk-chip {
+  display: inline-flex; align-items: center; gap: 8px; max-width: 240px; padding: 3px 10px 3px 3px;
+  border: 1px solid var(--gk-rule); border-radius: 999px; background: var(--gk-surface); color: var(--gk-ink); cursor: pointer;
+}
+.gk-chip:hover { background: var(--gk-row); }
+.gk-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gk-avatar {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--gk-primary); color: var(--gk-on-primary); font-size: 11px; font-weight: 600;
+}
+
+.gk-dialog {
+  width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0;
+  border: 1px solid var(--gk-rule); border-radius: 10px; background: var(--gk-surface); color: var(--gk-ink);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.gk-dialog::backdrop { background: var(--gk-backdrop); }
+.gk-dialog-body { padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
+.gk-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.gk-dialog-head h2 { font-size: 17px; font-weight: 600; margin: 0; }
+
+.gk-stack { display: flex; flex-direction: column; gap: 10px; }
+.gk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gk-footer-links { justify-content: space-between; }
+.gk-section-gap { margin-top: 4px; }
+.gk-text { margin: 0; line-height: 1.5; }
+.gk-hint { margin: 0; font-size: 12px; color: var(--gk-muted); line-height: 1.45; }
+.gk-hint a { color: var(--gk-accent); }
+
+.gk-field { display: flex; flex-direction: column; gap: 4px; }
+.gk-label { font-size: 12px; font-weight: 600; color: var(--gk-ink); }
+.gk-field input, .gk-field select, .gk-danger input {
+  min-width: 0; border: 1px solid var(--gk-rule); border-radius: 6px; background: var(--gk-bg); color: var(--gk-ink);
+  padding: 8px 10px; min-height: 36px;
+}
+
+.gk-divider { display: flex; align-items: center; gap: 10px; color: var(--gk-muted); font-size: 12px; }
+.gk-divider::before, .gk-divider::after { content: ""; flex: 1; border-top: 1px solid var(--gk-rule); }
+
+.gk-alert { margin: 0; padding: 8px 10px; border-radius: 6px; font-size: 13px; line-height: 1.45; }
+.gk-alert-error { background: var(--gk-warning-container); color: var(--gk-warning); }
+.gk-alert-info { background: var(--gk-row); }
+
+.gk-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
+.gk-facts dt { color: var(--gk-muted); }
+.gk-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.gk-sections { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.gk-sections ol { list-style: none; margin: 0; padding: 0; border: 1px solid var(--gk-rule); border-radius: 8px; }
+.gk-sections li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 6px 2px 10px; }
+.gk-sections li + li { border-top: 1px solid var(--gk-rule); }
+.gk-sections li.gk-hidden span { color: var(--gk-muted); }
+.gk-check { display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: 36px; }
+.gk-check input { width: 16px; height: 16px; accent-color: var(--gk-primary); }
+
+.gk-danger { border-top: 1px solid var(--gk-rule); padding-top: 12px; }
+.gk-danger summary { cursor: pointer; color: var(--gk-warning); font-weight: 500; }
+.gk-danger[open] { display: flex; flex-direction: column; gap: 10px; }
+
+@media (max-width: 480px) {
+  .gk-bar { padding: 12px 16px 0; }
+  .gk-dialog-body { padding: 16px; }
+}
