@@ -265,7 +265,7 @@ def tracks(icao: str) -> JSONResponse:
 # --- Live positions -----------------------------------------------------------------
 
 OPENSKY_STATES = "https://opensky-network.org/api/states/all"
-UA = {"User-Agent": "aviation-data-analysis (github.com/watanaberyunosuke/motherduck-aviation-data-analysis)"}
+UA = {"User-Agent": "aviation-data-analysis (github.com/watanaberyunosuke/groundkit-dashboard)"}
 OPENSKY_TOKEN_URL = ("https://auth.opensky-network.org/auth/realms/opensky-network"
                      "/protocol/openid-connect/token")
 # Live traffic within 500 NM, so en route arrivals and departures show, not just the
