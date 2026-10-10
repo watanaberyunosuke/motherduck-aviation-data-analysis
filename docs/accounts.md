@@ -55,7 +55,7 @@ The project URL and publishable key are public. Without them, each client hides 
 
 | Client | Where |
 |---|---|
-| Dashboard | Vercel environment variables `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` (build time) |
+| Dashboard | Vercel environment variables `NEXT_PUBLIC_GROUNDKIT_SUPABASE_URL`, `NEXT_PUBLIC_GROUNDKIT_SUPABASE_PUBLISHABLE_KEY` (build time; set by the Vercel Supabase integration) |
 | iOS | `GKSupabaseURL`, `GKSupabaseKey` in `Config/Info.plist`; Sign in with Apple capability on the App ID |
 | Android | `groundkit.supabaseUrl`, `groundkit.supabaseKey` in `gradle.properties` or `~/.gradle/gradle.properties` |
 

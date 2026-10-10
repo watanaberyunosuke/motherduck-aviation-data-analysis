@@ -1,10 +1,11 @@
-// The Supabase client, or null when the site is built without VITE_SUPABASE_URL and
-// VITE_SUPABASE_PUBLISHABLE_KEY. Without them sign-in is hidden and settings stay in this
+// The Supabase client, or null when the site is built without
+// NEXT_PUBLIC_GROUNDKIT_SUPABASE_URL and NEXT_PUBLIC_GROUNDKIT_SUPABASE_PUBLISHABLE_KEY
+// (set on Vercel by the Supabase integration). Without them sign-in is hidden and settings stay in this
 // browser.
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+const url = import.meta.env.NEXT_PUBLIC_GROUNDKIT_SUPABASE_URL as string | undefined;
+const key = import.meta.env.NEXT_PUBLIC_GROUNDKIT_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 
 export const supabase: SupabaseClient | null = url && key
   ? createClient(url, key, {

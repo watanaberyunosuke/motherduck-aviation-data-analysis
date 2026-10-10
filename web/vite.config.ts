@@ -7,6 +7,9 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  // Public build-time variables use the Next.js-style prefix, which is how the Vercel
+  // Supabase integration names them. Only NEXT_PUBLIC_* values reach the browser.
+  envPrefix: "NEXT_PUBLIC_",
   resolve: {
     alias: {
       "@motherduck/react-sql-query": fileURLToPath(new URL("./src/dive-runtime.ts", import.meta.url)),
