@@ -1,7 +1,7 @@
 # GroundKit accounts
 
 - **Optional.** The apps and the dashboard work signed out. An account syncs settings between iOS, Android and the dashboard.
-- **Sign-in:** email and password (with email confirmation and password reset), Apple, Google and Microsoft.
+- **Sign-in:** email and password (with email confirmation and password reset) and Google. Apple and Microsoft are off (section 3).
 - **Backend:** Supabase Auth, plus two Postgres tables in the same project (`supabase/migrations`). The aviation API (`api/index.py`) is unchanged and still needs no sign-in.
 - **Sync:** a timestamp per setting. The server keeps whichever change is newer, so two devices editing at once do not overwrite each other's other settings.
 - **Deletion:** in-app on all three clients. Deleting the auth user also deletes the profile and settings.
@@ -15,7 +15,7 @@
 | `merge_settings(patch, patch_stamps)` | Applies each key whose stamp is newer than the stored one and returns the merged row. A JSON `null` value removes the key. A missing or future stamp counts as now. Keys must match `^[A-Za-z][A-Za-z0-9]{0,63}$`. The patch is capped at 16 KB and the stored settings at 64 KB. If the account was deleted after the token was issued, it returns HTTP 401 (`PT401`). |
 | `set_display_name(name)` | The same as updating `profiles.display_name`, for Android, whose HTTP client has no PATCH. |
 | `delete_own_account()` | Deletes the caller's auth user. The profile and settings go with it (cascade). |
-| `on_auth_user_created` | Creates the profile (name from sign-up, Google or Microsoft) and an empty settings row. |
+| `on_auth_user_created` | Creates the profile (name from sign-up or Google) and an empty settings row. |
 
 Tests: `make test-supabase` runs the migration against a throwaway Postgres with a minimal stand-in for Supabase's `auth` schema and roles (`supabase/tests`). CI runs the same tests in the `supabase` job.
 
@@ -45,9 +45,8 @@ Tests: `make test-supabase` runs the migration against a throwaway Postgres with
    - Site URL: `https://groundkit-dashboard.harrydatahub.com/` (email confirmation and password-reset links open the dashboard).
    - Redirect URLs: the Site URL, `groundkit://auth-callback` (iOS and Android provider sign-in) and `http://localhost:5173/` for local development.
 3. Authentication > Providers > Email: keep "Confirm email" on, and set the minimum password length to 8 to match the clients.
-4. **Apple** ([docs](https://supabase.com/docs/guides/auth/social-login/auth-apple)): Client IDs are the Services ID first (web and Android), then the bundle ID `com.harrydatahub.GroundKit` (native iOS). The web flow's secret key expires every 6 months and must be rotated.
-5. **Google** ([docs](https://supabase.com/docs/guides/auth/social-login/auth-google)): a Web OAuth client with redirect URI `https://<project-ref>.supabase.co/auth/v1/callback`.
-6. **Microsoft** ([docs](https://supabase.com/docs/guides/auth/social-login/auth-azure)): an Entra ID app registration with the same redirect URI. Leave the tenant at the default ("common") for work and personal accounts. The clients request the `email` scope, which Supabase requires.
+4. **Google** ([docs](https://supabase.com/docs/guides/auth/social-login/auth-google)): a Web OAuth client with redirect URI `https://<project-ref>.supabase.co/auth/v1/callback`.
+5. **Apple and Microsoft: off.** Sign in with Apple needs a paid Apple Developer Program membership, so both are removed from the clients and should stay disabled under Authentication > Providers. To bring them back, revert the `chore/disable-apple-microsoft-sign-in` changes in the three client repos and configure [Apple](https://supabase.com/docs/guides/auth/social-login/auth-apple) (Services ID, then bundle ID `com.harrydatahub.GroundKit`; the web secret key expires every 6 months) and [Microsoft](https://supabase.com/docs/guides/auth/social-login/auth-azure) (Entra ID app, tenant "common", `email` scope).
 
 ## 4. Client configuration
 
@@ -56,15 +55,16 @@ The project URL and publishable key are public. Without them, each client hides 
 | Client | Where |
 |---|---|
 | Dashboard | Vercel environment variables `NEXT_PUBLIC_GROUNDKIT_SUPABASE_URL`, `NEXT_PUBLIC_GROUNDKIT_SUPABASE_PUBLISHABLE_KEY` (build time; set by the Vercel Supabase integration) |
-| iOS | `GKSupabaseURL`, `GKSupabaseKey` in `Config/Info.plist`; Sign in with Apple capability on the App ID |
+| iOS | `GKSupabaseURL`, `GKSupabaseKey` in `Config/Info.plist` |
 | Android | `groundkit.supabaseUrl`, `groundkit.supabaseKey` in `gradle.properties` or `~/.gradle/gradle.properties` |
 
-Provider sign-in uses PKCE on all clients ([Supabase PKCE flow](https://supabase.com/docs/guides/auth/sessions/pkce-flow)). iOS uses native Sign in with Apple for Apple, and `ASWebAuthenticationSession` for Google and Microsoft. Android uses a Custom Tab for all three, returning to `groundkit://auth-callback`. Session storage: the dashboard uses supabase-js (browser storage), iOS uses the Keychain (this device only), and Android encrypts with an Android Keystore key and excludes the session from backups.
+Provider sign-in uses PKCE on all clients ([Supabase PKCE flow](https://supabase.com/docs/guides/auth/sessions/pkce-flow)). iOS uses `ASWebAuthenticationSession` for Google. Android uses a Custom Tab, returning to `groundkit://auth-callback`. Session storage: the dashboard uses supabase-js (browser storage), iOS uses the Keychain (this device only), and Android encrypts with an Android Keystore key and excludes the session from backups.
 
 ## 5. Known gaps
 
-- **Sign in with Apple token revocation.** Apple asks apps to revoke Sign in with Apple tokens when an account is deleted ([Apple](https://developer.apple.com/support/offering-account-deletion-in-your-app/), [TN3194](https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple)). Supabase does not do this, and `delete_own_account` does not either. Revoking needs a server-side call with the Apple client secret, for example a Supabase Edge Function. Do this before App Store submission.
-- **Email.** Supabase's built-in email service has low sending limits. Set up custom SMTP and GroundKit-branded templates before launch.
+- **Email delivery.** Without custom SMTP, Supabase only sends auth emails to members of the project's team ([docs](https://supabase.com/docs/guides/auth/auth-smtp)). Anyone else who signs up with email gets no confirmation link and cannot finish signing up, and password-reset emails do not arrive either. Set up custom SMTP (and GroundKit-branded templates) before others use email sign-up.
+- **App Store sign-in rule.** With Google sign-in and no Sign in with Apple, the iOS app may need another option that meets App Review Guideline 4.8 before submission ([guidelines](https://developer.apple.com/app-store/review/guidelines/)). Not relevant until there is a paid membership.
+- **Sign in with Apple token revocation** (only if Apple comes back). Apple asks apps to revoke tokens on account deletion ([TN3194](https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple)); this needs a server-side call, for example a Supabase Edge Function.
 - **Not run on devices.** The iOS UI was not built in Xcode, and the Android UI was not run on a device or emulator. Their client and sync logic was tested against a local stand-in for the Supabase API (section 6).
 - No multi-factor authentication. No organisation accounts or employer SSO (out of scope for now).
 

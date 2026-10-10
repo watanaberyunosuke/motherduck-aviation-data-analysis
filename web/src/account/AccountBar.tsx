@@ -108,11 +108,10 @@ function Alert({ children, tone = "error" }: { children: ReactNode; tone?: "erro
 
 type AuthMode = "signin" | "signup" | "reset" | "sent" | "newPassword";
 
+// Apple and Microsoft are off for now: Sign in with Apple needs a paid Apple Developer
+// Program membership (docs/accounts.md section 3).
 const PROVIDERS: { id: Provider; label: string; scopes?: string }[] = [
-  { id: "apple", label: "Continue with Apple" },
   { id: "google", label: "Continue with Google" },
-  // Microsoft (Entra ID) only returns an email address when asked for it.
-  { id: "azure", label: "Continue with Microsoft", scopes: "email" },
 ];
 
 function AuthDialog({ open, onClose, startMode }: { open: boolean; onClose: () => void; startMode: "signin" | "signup" }) {
