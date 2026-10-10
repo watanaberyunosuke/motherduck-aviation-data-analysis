@@ -20,28 +20,30 @@ const pct = (v: unknown) => (v == null ? "–" : `${Math.round(N(v) * 100)}%`);
 const mins = (v: unknown) => (v == null ? "–" : `${N(v) >= 0 ? "+" : ""}${N(v).toFixed(1)} min`);
 
 const SANS = "'Inter', system-ui, -apple-system, sans-serif";
+// The wordmark's face; web/index.html loads it. Inside MotherDuck it falls back to the sans.
+const DISPLAY = "'Archivo', 'Inter', system-ui, -apple-system, sans-serif";
 
 // ---- Theme: colours are CSS variables on the root element, so inline styles, SVG and
 // Recharts all switch together. "auto" follows the system; a manual choice is remembered.
 // Values follow DESIGN.md (shared with the website and the apps). Light status colours
 // pass 4.5:1 as text on white, and under white text.
 const LIGHT = {
-  bg: "#ffffff", surface: "#ffffff", ink: "#1a1a1a", muted: "#6a6a6a", rule: "#e5e5e5",
-  "row-active": "#f3f4f6", code: "#f6f7f9", panel: "rgba(255,255,255,0.94)", "panel-faint": "rgba(255,255,255,0.8)",
-  "map-bg": "#eef1f4", halo: "#ffffff",
+  bg: "#ffffff", surface: "#ffffff", ink: "#14213d", muted: "#5a6478", rule: "#dde2ea",
+  "row-active": "#eef1f6", code: "#f3f5f9", panel: "rgba(255,255,255,0.94)", "panel-faint": "rgba(255,255,255,0.8)",
+  "map-bg": "#eef1f6", halo: "#ffffff",
   blue: "#2563eb", "blue-soft": "#93c5fd", orange: "#ea580c",
   vfr: "#15803d", mvfr: "#1d4ed8", ifr: "#c81e1e", lifr: "#a21caf",
   "rag-green": "#15803d", "rag-amber": "#b45309", "rag-red": "#c81e1e", "rag-unknown": "#6b7280",
-  ground: "#c4c8cf", other: "#b3b8bf",
+  ground: "#c4cad6", other: "#b1b9c7", "tile-edge": "#0f1f3d",
 };
 const DARK: typeof LIGHT = {
-  bg: "#121417", surface: "#1b1e23", ink: "#e6e7e9", muted: "#9aa0a8", rule: "#2e333a",
-  "row-active": "#23272e", code: "#1b1e23", panel: "rgba(27,30,35,0.94)", "panel-faint": "rgba(27,30,35,0.8)",
-  "map-bg": "#1f2226", halo: "#121417",
+  bg: "#0b1528", surface: "#13213b", ink: "#e8ecf3", muted: "#9aa6bc", rule: "#26344f",
+  "row-active": "#1b2b4a", code: "#13213b", panel: "rgba(19,33,59,0.94)", "panel-faint": "rgba(19,33,59,0.8)",
+  "map-bg": "#101c33", halo: "#0b1528",
   blue: "#60a5fa", "blue-soft": "#1e4fa8", orange: "#fb923c",
   vfr: "#22c55e", mvfr: "#60a5fa", ifr: "#f87171", lifr: "#e879f9",
-  "rag-green": "#22c55e", "rag-amber": "#fbbf24", "rag-red": "#f87171", "rag-unknown": "#9aa0a8",
-  ground: "#5b616a", other: "#6b7179",
+  "rag-green": "#22c55e", "rag-amber": "#fbbf24", "rag-red": "#f87171", "rag-unknown": "#9aa6bc",
+  ground: "#4a5874", other: "#5c6a86", "tile-edge": "rgba(255,255,255,0.25)",
 };
 const cssVars = (p: typeof LIGHT) => Object.entries(p).map(([k, v]) => `--ac-${k}:${v};`).join("");
 const THEME_CSS = `.airport-conditions{${cssVars(LIGHT)}color-scheme:light}`
@@ -130,21 +132,53 @@ const CATEGORY_COLORS: Record<string, string> = {
   VFR: c("vfr"), MVFR: c("mvfr"), IFR: c("ifr"), LIFR: c("lifr"),
 };
 
-// The GroundKit mark (web/public/icon.svg): a wheel against a chock, on a sky-to-navy tile.
+// The GroundKit mark (web/public/icon.svg): a tug pushing back an aircraft, seen from the side,
+// on a flat navy tile. White aircraft and yellow tug in both themes; on the dark navy page a
+// faint outline keeps the tile's edge visible.
 function LogoMark() {
   return (
-    <svg viewBox="0 0 64 64" width={18} height={18} aria-hidden="true" style={{ flex: "none" }}>
-      <defs>
-        <linearGradient id="ac-logo" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#38bdf8" /><stop offset="0.45" stopColor="#1d6fd0" /><stop offset="1" stopColor="#0b3d91" />
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx="14" fill="url(#ac-logo)" />
-      <circle cx="27" cy="31" r="12" fill="none" stroke="#fff" strokeWidth="5" />
-      <circle cx="27" cy="31" r="3.5" fill="#fff" />
-      <path d="M37.5 45.5 L46.5 33 L53 33 L53 45.5 Z" fill="#fff" />
-      <rect x="10" y="45.5" width="44" height="4" rx="2" fill="#fff" />
+    <svg viewBox="0 0 100 100" width={22} height={22} aria-hidden="true" style={{ flex: "none", borderRadius: 5 }}>
+      <rect x="1.5" y="1.5" width="97" height="97" rx="21" fill="#0f1f3d" stroke={c("tile-edge")} strokeWidth={3} />
+      <g transform="translate(50 50) scale(0.9) translate(-54.9 -43.65)">
+        <path d="M32 38.5 L20.6 20.2 C20.1 19.5 19.4 19 18.5 19 L15.2 19 C14.4 19 13.8 19.7 13.9 20.5 L15.6 38.5 Z" fill="#ffffff"/>
+        <path d="M20 38 L68 38 C75.5 38 81.4 41.8 83.4 46.4 C84.4 49.6 82.2 52.5 78 52.5 L34 52.5 C26 52.5 18.5 47.6 12.9 43.1 C12 42.4 12.2 41.1 13.2 40.6 C15.1 39 17.4 38 20 38 Z" fill="#ffffff"/>
+        <path d="M73.2 41.6 L78.4 41.6 C79.3 41.6 80 42.1 80.5 42.8 L81.3 44.2 L74 44.2 C73.3 44.2 72.8 43.6 72.8 42.9 C72.8 42.2 72.9 41.6 73.2 41.6 Z" fill="#0f1f3d"/>
+        <circle cx="31.60" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="35.90" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="40.20" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="44.50" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="48.80" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="53.10" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="57.40" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="61.70" cy="43.2" r="1" fill="#0f1f3d"/>
+        <circle cx="66.00" cy="43.2" r="1" fill="#0f1f3d"/>
+        <path d="M38.5 50.5 L60.5 50.5 L56 55 C55.6 55.4 55.1 55.6 54.5 55.6 L36.6 55.6 C35.8 55.6 35.5 54.7 36.1 54.2 Z" fill="#ffffff"/>
+        <rect x="43" y="55.6" width="16" height="1.1" fill="#0f1f3d"/>
+        <rect x="42.4" y="55.4" width="15.4" height="7" rx="3.5" fill="#ffffff"/>
+        <rect x="55.2" y="56.4" width="1.5" height="5" rx="0.75" fill="#0f1f3d"/>
+        <rect x="61.4" y="52" width="1.6" height="7.4" fill="#ffffff"/>
+        <circle cx="62.2" cy="61.2" r="2.4" fill="#8796ad"/>
+        <rect x="76.2" y="52" width="1.4" height="7.6" fill="#ffffff"/>
+        <circle cx="76.9" cy="61.6" r="2" fill="#8796ad"/>
+        <rect x="76.9" y="60.9" width="8.4" height="1.5" rx="0.75" fill="#f4c400"/>
+        <path d="M85.6 57 L96 57 C96.9 57 97.6 57.7 97.6 58.6 L97.6 62.4 C97.6 63.3 96.9 64 96 64 L85 64 C84.1 64 83.4 63.3 83.4 62.4 L83.4 59.2 C83.4 58 84.4 57 85.6 57 Z" fill="#f4c400"/>
+        <path d="M90.6 52.4 L96 52.4 C96.9 52.4 97.6 53.1 97.6 54 L97.6 57.4 L89.2 57.4 L89.2 53.8 C89.2 53 89.8 52.4 90.6 52.4 Z" fill="#f4c400"/>
+        <path d="M90.6 53.7 L93.6 53.7 L93.6 56.2 L90.6 56.2 Z" fill="#0f1f3d"/>
+        <rect x="93.4" y="50.7" width="2" height="1.7" rx="0.5" fill="#f4c400"/>
+        <circle cx="86.8" cy="64.1" r="2" fill="#8796ad"/>
+        <circle cx="94.2" cy="64.1" r="2" fill="#8796ad"/>
+        <rect x="11" y="67.2" width="87" height="1.1" rx="0.55" fill="#8796ad" fillOpacity={0.4}/>
+      </g>
     </svg>
+  );
+}
+
+// The wordmark: "Ground" heavy and "Kit" medium, in expanded Archivo.
+function Wordmark() {
+  return (
+    <span style={{ fontFamily: DISPLAY, fontStretch: "125%", fontSize: 15, letterSpacing: "-0.01em", color: INK }}>
+      <span style={{ fontWeight: 800 }}>Ground</span><span style={{ fontWeight: 500 }}>Kit</span>
+    </span>
   );
 }
 
@@ -1798,10 +1832,10 @@ export default function AirportConditions() {
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: MUTED }}>
-            <LogoMark />GroundKit
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <LogoMark /><Wordmark />
           </div>
-          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>Airport conditions</h1>
+          <h1 style={{ fontFamily: DISPLAY, fontStretch: "112.5%", fontSize: 22, fontWeight: 700, margin: "6px 0 0" }}>Airport conditions</h1>
         </div>
         <ThemeSwitch mode={theme.mode} onChange={theme.setMode} />
       </div>
