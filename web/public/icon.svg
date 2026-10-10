@@ -1,14 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="gk" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#38BDF8"/>
-      <stop offset="0.45" stop-color="#1D6FD0"/>
-      <stop offset="1" stop-color="#0B3D91"/>
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="14" fill="url(#gk)"/>
-  <circle cx="27" cy="31" r="12" fill="none" stroke="#FFFFFF" stroke-width="5"/>
-  <circle cx="27" cy="31" r="3.5" fill="#FFFFFF"/>
-  <path d="M37.5 45.5 L46.5 33 L53 33 L53 45.5 Z" fill="#FFFFFF"/>
-  <rect x="10" y="45.5" width="44" height="4" rx="2" fill="#FFFFFF"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="22" fill="#0F1F3D"/>
+  <g transform="translate(50 50) scale(0.9) translate(-54.9 -43.65)">
+    <path d="M32 38.5 L20.6 20.2 C20.1 19.5 19.4 19 18.5 19 L15.2 19 C14.4 19 13.8 19.7 13.9 20.5 L15.6 38.5 Z" fill="#ffffff"/>
+    <path d="M20 38 L68 38 C75.5 38 81.4 41.8 83.4 46.4 C84.4 49.6 82.2 52.5 78 52.5 L34 52.5 C26 52.5 18.5 47.6 12.9 43.1 C12 42.4 12.2 41.1 13.2 40.6 C15.1 39 17.4 38 20 38 Z" fill="#ffffff"/>
+    <path d="M73.2 41.6 L78.4 41.6 C79.3 41.6 80 42.1 80.5 42.8 L81.3 44.2 L74 44.2 C73.3 44.2 72.8 43.6 72.8 42.9 C72.8 42.2 72.9 41.6 73.2 41.6 Z" fill="#0f1f3d"/>
+    <circle cx="31.60" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="35.90" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="40.20" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="44.50" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="48.80" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="53.10" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="57.40" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="61.70" cy="43.2" r="1" fill="#0f1f3d"/>
+    <circle cx="66.00" cy="43.2" r="1" fill="#0f1f3d"/>
+    <path d="M38.5 50.5 L60.5 50.5 L56 55 C55.6 55.4 55.1 55.6 54.5 55.6 L36.6 55.6 C35.8 55.6 35.5 54.7 36.1 54.2 Z" fill="#ffffff"/>
+    <rect x="43" y="55.6" width="16" height="1.1" fill="#0f1f3d"/>
+    <rect x="42.4" y="55.4" width="15.4" height="7" rx="3.5" fill="#ffffff"/>
+    <rect x="55.2" y="56.4" width="1.5" height="5" rx="0.75" fill="#0f1f3d"/>
+    <rect x="61.4" y="52" width="1.6" height="7.4" fill="#ffffff"/>
+    <circle cx="62.2" cy="61.2" r="2.4" fill="#8796ad"/>
+    <rect x="76.2" y="52" width="1.4" height="7.6" fill="#ffffff"/>
+    <circle cx="76.9" cy="61.6" r="2" fill="#8796ad"/>
+    <rect x="76.9" y="60.9" width="8.4" height="1.5" rx="0.75" fill="#f4c400"/>
+    <path d="M85.6 57 L96 57 C96.9 57 97.6 57.7 97.6 58.6 L97.6 62.4 C97.6 63.3 96.9 64 96 64 L85 64 C84.1 64 83.4 63.3 83.4 62.4 L83.4 59.2 C83.4 58 84.4 57 85.6 57 Z" fill="#f4c400"/>
+    <path d="M90.6 52.4 L96 52.4 C96.9 52.4 97.6 53.1 97.6 54 L97.6 57.4 L89.2 57.4 L89.2 53.8 C89.2 53 89.8 52.4 90.6 52.4 Z" fill="#f4c400"/>
+    <path d="M90.6 53.7 L93.6 53.7 L93.6 56.2 L90.6 56.2 Z" fill="#0f1f3d"/>
+    <rect x="93.4" y="50.7" width="2" height="1.7" rx="0.5" fill="#f4c400"/>
+    <circle cx="86.8" cy="64.1" r="2" fill="#8796ad"/>
+    <circle cx="94.2" cy="64.1" r="2" fill="#8796ad"/>
+    <rect x="11" y="67.2" width="87" height="1.1" rx="0.55" fill="#8796ad" fill-opacity="0.4"/>
+  </g>
 </svg>

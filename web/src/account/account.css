@@ -1,20 +1,20 @@
 /* The account bar and its dialogs. Colours are DESIGN.md's; the theme follows the Dive's
    data-theme (or the system before the Dive mounts), as index.html does for the page. */
 :root {
-  --gk-bg: #ffffff; --gk-surface: #ffffff; --gk-ink: #1a1a1a; --gk-muted: #6a6a6a; --gk-rule: #e5e5e5;
-  --gk-row: #f3f4f6; --gk-primary: #0b3d91; --gk-on-primary: #ffffff; --gk-accent: #2563eb;
+  --gk-bg: #ffffff; --gk-surface: #ffffff; --gk-ink: #14213d; --gk-muted: #5a6478; --gk-rule: #dde2ea;
+  --gk-row: #eef1f6; --gk-primary: #0f1f3d; --gk-on-primary: #ffffff; --gk-accent: #2a4a8a;
   --gk-warning: #c81e1e; --gk-warning-container: #f7e3e1; --gk-backdrop: rgba(17, 24, 39, 0.45);
 }
 @media (prefers-color-scheme: dark) {
   html:not(:has([data-theme="light"])) {
-    --gk-bg: #121417; --gk-surface: #1b1e23; --gk-ink: #e6e7e9; --gk-muted: #9aa0a8; --gk-rule: #2e333a;
-    --gk-row: #23272e; --gk-primary: #60a5fa; --gk-on-primary: #0b1b36; --gk-accent: #60a5fa;
+    --gk-bg: #0b1528; --gk-surface: #13213b; --gk-ink: #e8ecf3; --gk-muted: #9aa6bc; --gk-rule: #26344f;
+    --gk-row: #1b2b4a; --gk-primary: #e8ecf3; --gk-on-primary: #0f1f3d; --gk-accent: #9db8e8;
     --gk-warning: #f87171; --gk-warning-container: #3e2525; --gk-backdrop: rgba(0, 0, 0, 0.6);
   }
 }
 html:has([data-theme="dark"]) {
-  --gk-bg: #121417; --gk-surface: #1b1e23; --gk-ink: #e6e7e9; --gk-muted: #9aa0a8; --gk-rule: #2e333a;
-  --gk-row: #23272e; --gk-primary: #60a5fa; --gk-on-primary: #0b1b36; --gk-accent: #60a5fa;
+  --gk-bg: #0b1528; --gk-surface: #13213b; --gk-ink: #e8ecf3; --gk-muted: #9aa6bc; --gk-rule: #26344f;
+  --gk-row: #1b2b4a; --gk-primary: #e8ecf3; --gk-on-primary: #0f1f3d; --gk-accent: #9db8e8;
   --gk-warning: #f87171; --gk-warning-container: #3e2525; --gk-backdrop: rgba(0, 0, 0, 0.6);
 }
 

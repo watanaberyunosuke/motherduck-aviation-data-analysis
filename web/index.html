@@ -6,22 +6,22 @@
 <title>GroundKit · Airport conditions</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121417">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b1528">
 <meta name="description" content="GroundKit's airport conditions dashboard: per-airport weather, observed traffic and excess terminal-area time for SYD, MEL, BNE, SIN, HKG, AMS and ANC.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@112.5..125,500..800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   /* The Dive is written for MotherDuck's host page: a white canvas with Tailwind. These
      are the only Tailwind classes it uses. */
   html, body { margin: 0; }
-  /* The Dive themes itself; the page around it follows the Dive's data-theme (#121417
+  /* The Dive themes itself; the page around it follows the Dive's data-theme (#0b1528
      is the Dive's dark background), or the system before the Dive has mounted. */
   html { background: #ffffff; }
   @media (prefers-color-scheme: dark) {
-    html:not(:has([data-theme="light"])) { background: #121417; color-scheme: dark; }
+    html:not(:has([data-theme="light"])) { background: #0b1528; color-scheme: dark; }
   }
-  html:has([data-theme="dark"]) { background: #121417; color-scheme: dark; }
+  html:has([data-theme="dark"]) { background: #0b1528; color-scheme: dark; }
   #root { margin: 0 auto; max-width: 1100px; overflow-x: auto; }
   .rounded { border-radius: 0.25rem; }
   .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }

@@ -6,37 +6,41 @@ One palette for every GroundKit product: the Airport conditions dashboard (`dive
 
 1. **Usable outdoors first.** Crews read the apps in sunlight, at night, in gloves and in a hurry. Text meets WCAG AA (4.5:1, or 3:1 for large or bold text); controls and chart marks meet 3:1.
 2. **Status never by colour alone.** Every status carries an icon and a word (Normal ops, Caution, Warning; On time, Late, Very late).
-3. **The brand never looks like a status.** The brand is blue. Amber, orange and red mean caution or warning and are not used for branding or primary controls.
+3. **The brand never looks like a status.** The brand is navy. The signal yellow is decoration only (the tug in the logo, accent rules), never a control, a badge or a fill behind text, because amber means caution. Amber, orange and red are not used for branding or primary controls.
 4. **Aviation conventions win over the brand.** Flight categories keep their standard colours (VFR green, MVFR blue, IFR red, LIFR magenta), even though MVFR is close to the brand blue. Category badges always show their label.
-5. **Native first on mobile.** Shared colours, platform controls. iOS uses the soft status tones in §4 as asset colours, each with an Increase Contrast variant; Android keeps fixed schemes rather than wallpaper colour, for contrast outdoors.
+5. **Native first on mobile.** Shared colours, platform controls. iOS uses the soft status tones in section 4 as asset colours, each with an Increase Contrast variant; Android keeps fixed schemes rather than wallpaper colour, for contrast outdoors.
 
-## 2. Brand colours: light blue to navy
+## 2. Brand colours: navy and signal yellow
+
+From the Set 2 logo sheet (`GroundKit Logo Concepts.pdf`).
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `primary` (navy) | `#0B3D91` | `#60A5FA` | Filled buttons, selected chips and tabs, iOS tint, Material `primary` |
-| `on-primary` | `#FFFFFF` | `#0B1B36` | Text and icons on `primary` |
-| `accent` (blue) | `#2563EB` | `#60A5FA` | Links, focus rings, brand text such as eyebrows |
-| `sky` | `#38BDF8` | `#7DD3FC` | Decoration only (logo gradient, hero pattern). Never text, never on its own as a control |
-| `primary-container` | `#D9E3F8` | `#12305F` | Tinted panels, Material `primaryContainer` |
-| `on-primary-container` | `#001A43` | `#D6E4FF` | Text on `primary-container` |
+| `primary` (navy) | `#0F1F3D` | `#E8ECF3` | Filled buttons, selected chips and tabs, iOS tint, Material `primary` |
+| `on-primary` | `#FFFFFF` | `#0F1F3D` | Text and icons on `primary` |
+| `accent` | `#2A4A8A` | `#9DB8E8` | Eyebrows, icons, focus rings, account links |
+| `signal` (yellow) | `#F4C400` | `#F4C400` | Decoration only: the logo's tug, accent rules. Never text, never a control |
+| `tint` | `#EEF1F6` | `#13213B` | Alternate section background, `primary-container` |
+| `on-tint` | `#0F1F3D` | `#E8ECF3` | Text on `tint` |
 
-In dark mode the primary becomes light blue, so filled controls take navy text (`on-primary`) rather than white.
+In dark mode the page is deep navy and filled controls turn near-white with navy text. Data links and the arrival path keep the data blue in section 4.
 
-**Logo.** The wheel-and-chock mark, white, on a tile with a diagonal gradient from `#38BDF8` (top left) through `#1D6FD0` (45%) to `#0B3D91` (bottom right). The middle stop keeps the white glyph above 4:1 where it sits. The same artwork is used for the iOS app icon, the Android adaptive icon (gradient background, white foreground, foreground also used for the themed icon), the website and the dashboard favicon. The master is `web/public/icon.svg`.
+**Logo.** A tug pushing back an aircraft, seen from the side: white aircraft, yellow (`#F4C400`) tug and tow bar, grey (`#8796AD`) wheels, on a flat navy (`#0F1F3D`) tile with a 22% corner radius, in both themes. On a navy page give the tile a faint white outline (20%). The master is `web/public/icon.svg`; the website's `src/app/icon.svg` is the same file. The same artwork is used for the iOS app icon and the Android adaptive icon (navy background, artwork as foreground).
+
+**Wordmark.** "Ground" ExtraBold (800) and "Kit" Medium (500), set in Archivo at 125% width, navy on light and white on navy, to the right of the tile.
 
 ## 3. Neutrals
 
 | Token | Light | Dark |
 |---|---|---|
-| `bg` | `#FFFFFF` (Android `#F5F6F8`) | `#121417` |
-| `surface` | `#FFFFFF` | `#1B1E23` |
-| `ink` | `#1A1A1A` | `#E6E7E9` |
-| `muted` | `#6A6A6A` | `#9AA0A8` |
-| `rule` | `#E5E5E5` | `#2E333A` |
-| `row-active` | `#F3F4F6` | `#23272E` |
+| `bg` | `#FFFFFF` (Android `#F5F6F8`) | `#0B1528` |
+| `surface` | `#FFFFFF` | `#13213B` |
+| `ink` | `#14213D` | `#E8ECF3` |
+| `muted` | `#5A6478` | `#9AA6BC` |
+| `rule` | `#DDE2EA` | `#26344F` |
+| `row-active` | `#EEF1F6` | `#1B2B4A` |
 
-iOS uses the system backgrounds and label colours instead (`.background`, `.secondary`).
+`muted` passes 4.5:1 on `bg` and `surface` in both themes. iOS uses the system backgrounds and label colours instead (`.background`, `.secondary`).
 
 ## 4. Status and data colours
 
@@ -45,7 +49,7 @@ iOS uses the system backgrounds and label colours instead (`.background`, `.seco
 | OK, on time, VFR | `#15803D` | `#22C55E` | `StatusOK` |
 | Caution, late | `#B45309` | `#FBBF24` | `StatusCaution` |
 | Warning, very late, IFR | `#C81E1E` | `#F87171` | `StatusWarning` |
-| Unknown | `#6B7280` | `#9AA0A8` | `.secondary` |
+| Unknown | `#6B7280` | `#9AA6BC` | `.secondary` |
 | MVFR | `#1D4ED8` | `#60A5FA` | `.blue` |
 | LIFR | `#A21CAF` | `#E879F9` | `.purple` |
 | Arrival path | `#2563EB` | `#60A5FA` | |
@@ -66,7 +70,7 @@ The light values are darker than the Tailwind defaults so that they pass 4.5:1 a
 
 | Platform | Family | Notes |
 |---|---|---|
-| Web (dashboard, website) | Inter | Tabular numerals for times and counts |
+| Web (dashboard, website) | Inter; Archivo (semi-expanded, 112.5%) for headings and the wordmark | Tabular numerals for times and counts |
 | iOS | SF Pro (system), SF Rounded for the clocks | Dynamic Type sizes; glove mode one step larger |
 | Android | Roboto (system) | Material type scale one step larger (`Type.kt`) |
 | Raw METAR, TAF, NOTAM | System monospace | |
@@ -81,8 +85,8 @@ The light values are darker than the Tailwind defaults so that they pass 4.5:1 a
 
 | Product | File |
 |---|---|
-| Dashboard | `dives/airport_conditions/index.tsx` (`LIGHT`, `DARK`) |
-| Website | `src/app/globals.css` (`--brand`, `--status-*`) |
+| Dashboard | `dives/airport_conditions/index.tsx` (`LIGHT`, `DARK`), `web/src/account/account.css`, `web/index.html` |
+| Website | `src/app/globals.css` (`--brand*`, `--status-*`) |
 | iOS | `Assets.xcassets` (`AccentColor`, `OnAccent`, `AppIcon`, `Status*`, `Status*Container`) |
 | Android | `ui/theme/Color.kt`, `ui/theme/Theme.kt`, `res/drawable/ic_launcher_*.xml` |
 

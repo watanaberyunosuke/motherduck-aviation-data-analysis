@@ -267,7 +267,7 @@ function AuthDialog({ open, onClose, startMode }: { open: boolean; onClose: () =
           {mode === "signup" && (
             <p className="gk-hint">
               An account syncs your GroundKit settings between the dashboard and the apps. See the{" "}
-              <a href="https://groundkit-intro-website.vercel.app/privacy" target="_blank" rel="noreferrer">privacy policy</a>.
+              <a href="https://groundkit.harrydatahub.com/privacy" target="_blank" rel="noreferrer">privacy policy</a>.
             </p>
           )}
         </>
