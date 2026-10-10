@@ -35,7 +35,7 @@ os.environ.setdefault("HOME", "/tmp")  # duckdb's extension cache, as in api/ind
 import duckdb
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = "watanaberyunosuke/motherduck-aviation-data-analysis"
+REPO = "watanaberyunosuke/groundkit-dashboard"
 DATABASE = "aviation"
 
 FLIGHT_NAME = "aviation_pipeline"  # the scheduled one; scripts/run_flight.py's default

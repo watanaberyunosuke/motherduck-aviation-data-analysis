@@ -43,7 +43,7 @@ Tests: `make test-supabase` runs the migration against a throwaway Postgres with
 1. Create a project, then apply `supabase/migrations` with `supabase db push` or the SQL editor.
 2. Authentication > URL Configuration ([docs](https://supabase.com/docs/guides/auth/redirect-urls)):
    - Site URL: `https://groundkit-dashboard.harrydatahub.com/` (email confirmation and password-reset links open the dashboard).
-   - Redirect URLs: the Site URL, `groundkit://auth-callback` (iOS and Android provider sign-in) and `http://localhost:5173/` for local development. Add `https://motherduck-aviation-data-analysis.vercel.app/` too while links to the old address are still in use.
+   - Redirect URLs: the Site URL, `groundkit://auth-callback` (iOS and Android provider sign-in) and `http://localhost:5173/` for local development.
 3. Authentication > Providers > Email: keep "Confirm email" on, and set the minimum password length to 8 to match the clients.
 4. **Apple** ([docs](https://supabase.com/docs/guides/auth/social-login/auth-apple)): Client IDs are the Services ID first (web and Android), then the bundle ID `com.harrydatahub.GroundKit` (native iOS). The web flow's secret key expires every 6 months and must be rotated.
 5. **Google** ([docs](https://supabase.com/docs/guides/auth/social-login/auth-google)): a Web OAuth client with redirect URI `https://<project-ref>.supabase.co/auth/v1/callback`.

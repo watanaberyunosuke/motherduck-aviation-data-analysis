@@ -33,7 +33,7 @@ from aviation.http import DEFAULT_TIMEOUT, session
 log = logging.getLogger(__name__)
 
 # MET Norway blocks requests without a User-Agent that says who is calling.
-MET_NO_USER_AGENT = "aviation-data-analysis/0.1 github.com/watanaberyunosuke/motherduck-aviation-data-analysis"
+MET_NO_USER_AGENT = "aviation-data-analysis/0.1 github.com/watanaberyunosuke/groundkit-dashboard"
 
 HKO_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php"
 NEA_URL = "https://api-open.data.gov.sg/v2/real-time/api/air-temperature"

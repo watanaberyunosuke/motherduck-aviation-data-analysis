@@ -282,7 +282,7 @@ function validZone(tz: string): boolean {
 const zoneLabel = (tz: string) => (tz === "UTC" ? "UTC" : tz.split("/").pop()!.replace(/_/g, " "));
 // On the Vercel site the API is same-origin; inside MotherDuck it is the production site.
 const API_BASE = /(^|\.)vercel\.app$|^localhost$|^127\.0\.0\.1$/.test(window.location.hostname)
-  ? "" : "https://motherduck-aviation-data-analysis.vercel.app";
+  ? "" : "https://groundkit-dashboard.harrydatahub.com";
 const LIVE_REFRESH_MS = 120_000; // matches the API's edge cache
 
 // "09:41:07" plus "Sat 4 Oct" and "GMT+8" in the given zone.
