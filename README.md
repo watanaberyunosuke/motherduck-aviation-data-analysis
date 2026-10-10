@@ -180,7 +180,7 @@ cd web && yarn install --frozen-lockfile && yarn dev               # proxies /ap
 
 ### Accounts (optional)
 
-GroundKit accounts sync settings between the iOS app, the Android app and the dashboard. Sign-in uses email and password, Apple, Google or Microsoft through Supabase Auth, and the schema is in `supabase/migrations`. The dashboard shows **Customise** (home airport, third clock, section order and visibility) and **Sign in** above the Dive. Signed out, customisation stays in the browser. The Dive reads the layout and clock as Dive state (`layout`, `home_tz`), so inside MotherDuck it shows the defaults. Sign-in switches on when the build has `NEXT_PUBLIC_GROUNDKIT_SUPABASE_URL` and `NEXT_PUBLIC_GROUNDKIT_SUPABASE_PUBLISHABLE_KEY`, which the Vercel Supabase integration sets. Setup, the settings contract and known gaps are in [docs/accounts.md](docs/accounts.md).
+GroundKit accounts sync settings between the iOS app, the Android app and the dashboard. Sign-in uses email and password or Google through Supabase Auth, and the schema is in `supabase/migrations`. The dashboard shows **Customise** (home airport, third clock, section order and visibility) and **Sign in** above the Dive. Signed out, customisation stays in the browser. The Dive reads the layout and clock as Dive state (`layout`, `home_tz`), so inside MotherDuck it shows the defaults. Sign-in switches on when the build has `NEXT_PUBLIC_GROUNDKIT_SUPABASE_URL` and `NEXT_PUBLIC_GROUNDKIT_SUPABASE_PUBLISHABLE_KEY`, which the Vercel Supabase integration sets. Setup, the settings contract and known gaps are in [docs/accounts.md](docs/accounts.md).
 
 ### Deploying
 
